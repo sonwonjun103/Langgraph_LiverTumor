@@ -11,10 +11,11 @@ from typing import Tuple, Dict, Optional
 
 class Registration:
     def __init__(self,
-                 regis_param,
-                 input_folder: str,
-                 output_path: str,
-                 attempt: int = 0):
+                 regis_param=None,
+                 input_folder: str = None,
+                 output_path: str = None,
+                 attempt: int = 0,
+                 **kwargs):
         """
         Args:
             regis_param  : Registration configuration dict
@@ -22,6 +23,18 @@ class Registration:
             output_path  : 결과 저장 루트 (e.g. ./results/1043712)
             attempt      : 0-indexed attempt number
         """
+        if regis_param is None and "reg_param" in kwargs:
+            regis_param = kwargs.pop("reg_param")
+        if kwargs:
+            unexpected = ", ".join(sorted(kwargs))
+            raise TypeError(f"Unexpected Registration argument(s): {unexpected}")
+        if regis_param is None:
+            raise ValueError("Registration requires regis_param.")
+        if input_folder is None:
+            raise ValueError("Registration requires input_folder.")
+        if output_path is None:
+            raise ValueError("Registration requires output_path.")
+
         self.input_folder  = input_folder
         self.output_folder = os.path.join(output_path, "registration")
         os.makedirs(self.output_folder, exist_ok=True)
