@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+.venv/
+venv/
+env/
+
+# IDE / local agent state
+.vscode/
+.idea/
+.agents/
+.codex/
+
+# Logs and outputs
+*.log
+logs/
+Results/
+results/
+outputs/
+runs/
+wandb/
+
+# Medical images and generated nnUNet data
+*.nii
+*.nii.gz
+*.mha
+*.mhd
+*.nrrd
+*.dcm
+*.b2nd
+nnUNet/nnUNet_raw/
+nnUNet/nnUNet_preprocessed/
+nnUNet/nnUNet_results/
+
+# Model weights and checkpoints
+checkpoints/
+checkpoint/
+snapshot/
+ckpt/
+*.pt
+*.pth
+*.pth.tar
+*.ckpt
+*.onnx
+
+# Local metadata that may contain patient identifiers
+*.xlsx
+*.xls
+*.csv
+
+# OS files
+.DS_Store
+Thumbs.db
