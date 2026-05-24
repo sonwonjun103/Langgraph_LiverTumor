@@ -1,20 +1,53 @@
 # Python
 __pycache__/
-*.py[cod]
+*.py[codz]
 *$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+cover/
 .ipynb_checkpoints/
+
+# Environments
+.env
+.envrc
 .venv/
 venv/
 env/
+ENV/
+env.bak/
+venv.bak/
+__pypackages__/
 
 # IDE / local agent state
 .vscode/
 .idea/
 .agents/
 .codex/
+.cursorignore
+.cursorindexingignore
 
 # Logs and outputs
 *.log

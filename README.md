@@ -1,4 +1,4 @@
-# Code Cleanup Flow
+# Langgraph_LiverTumor
 
 이 문서는 코드 정리를 시작하기 전에 프로젝트의 전체 흐름과 정리할 항목을 한곳에 모아두기 위한 README입니다.
 
@@ -63,7 +63,7 @@
 
 ## TODO
 
-- [ ] 데이터 폴더 구조 정리 -> 이건 단지 train 을위한 경로 지정 
+- [ ] 데이터 폴더 구조 정리 -> 이건 단지 train 을위한 경로 지정
 - [ ] train/test split 파일 생성
 - [ ] Resampling 코드 생성
 - [ ] registration 코드 분리
