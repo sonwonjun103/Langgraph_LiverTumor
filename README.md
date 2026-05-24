@@ -1,76 +1,270 @@
-# Langgraph_LiverTumor
+# LangGraph Liver Tumor Segmentation
 
-이 문서는 코드 정리를 시작하기 전에 프로젝트의 전체 흐름과 정리할 항목을 한곳에 모아두기 위한 README입니다.
+Research code for multi-phase liver tumor segmentation and registration-driven
+inference on abdominal CT. The project is built around arterial, portal venous,
+and delayed phase NIfTI volumes, with baseline segmentation models and a
+LangGraph-style orchestration notebook for patient-level inference.
 
-## 1. Data
+## Overview
 
-- Data1: 47 cases
-- Data2: 87 cases
-- 전체 기준: 2,000 tumor size 이상
-- Split
-  - Train: 100
-  - Test: 34
+This repository supports experiments for liver tumor segmentation using three
+contrast-enhanced CT phases:
 
-## 2. Registration
+- **A**: arterial phase
+- **P**: portal venous phase
+- **D**: delayed phase
 
-### Phase Registration
+The current training and inference code covers:
 
-- A, P, D phase registration 정리
-- Affine transformation
-- Deformable registration
-- Ablation study 대상
+- 3D U-Net
+- SwinUNETR
+- 3D SAM Adapter
+- nnUNetv2 dataset preparation and CLI integration
+- registration quality control using liver Dice
+- tumor segmentation evaluation with Dice, IoU, and lesion-level detection metrics
 
-### Learning-Based Registration
+The repository intentionally excludes medical images, generated nnUNet folders,
+model checkpoints, and local spreadsheet metadata. See `.gitignore` for the data
+and artifact policy.
 
-- VoxelMorph
-- TransMorph
-- Learning-based registration 실험 정리
+## Repository Layout
 
-## 3. Registration Quality Metrics
+```text
+.
+├── main.py                         # Training entry point for UNet, SwinUNETR, 3D SAM Adapter
+├── inference.py                    # Single-case inference for direct PyTorch baselines
+├── nnunetdataset.py                # nnUNet raw dataset conversion utility
+├── pipeline.ipynb                  # LangGraph-style patient inference pipeline
+├── logger.py                       # File and console logger setup
+├── train/
+│   ├── trainer.py                  # MONAI-based generic trainer
+│   ├── sam_adapter_trainer.py      # Dedicated 3D SAM Adapter training loop
+│   ├── data/dataset.py             # 3-phase CT dataset and MONAI preprocessing
+│   └── models/
+│       ├── UNet.py
+│       ├── SwinUNetR.py
+│       ├── SAMAdapter.py
+│       └── 3DSAMAdapter/           # 3D SAM Adapter model components
+└── langgraph/files/
+    ├── config.py
+    ├── confg.py
+    ├── registration.py
+    ├── resampler.py
+    ├── liver_extractor.py
+    └── tumor_extractor.py
+```
 
-- TotalSegmentator를 이용한 3-phase liver Dice 평가
-- 목표 기준
-  - Dice > 0.95
-- 0.95가 안될시 다시 registration 시도
+## Data Assumptions
 
-## 4. Model
+The training split is derived from `alldata_metrics.xlsx` and sorted by tumor
+size. By default:
 
-### Candidate Models
+- test cases: first 34 sorted cases
+- train cases: remaining cases
 
-- nnUNet
-- U-Net
-- 3D SAM adapter
-- Transformer-based model
+Two input modes are supported:
 
-### Development
+- `--data_type ct`: original CT phases
+  - `A.nii.gz`
+  - `P.nii.gz`
+  - `D.nii.gz`
+- `--data_type liver`: liver-extracted phase volumes
+  - `AliverAv.nii.gz`
+  - `PliverPv.nii.gz`
+  - `DliverDv.nii.gz`
 
-- 자체 모델 개발 여부 검토
-- 기존 모델 baseline 정리
-- 모델별 input/output 형식 통일
+Labels are expected as:
 
-### Evaluation
+```text
+label.nii.gz
+```
 
-- Segmentation
-  - Dice
-  - IoU
-- Detection
-  - Confusion matrix
+Local data roots are configured in `config.py`.
 
-## 5. LangGraph
+## Installation
 
-- 전체 pipeline orchestration 후보
-- Data preprocessing, registration, model inference, evaluation 단계를 graph node로 분리할 수 있는지 검토
+Create an environment with PyTorch and the medical imaging dependencies used by
+the pipeline:
 
-## TODO
+```bash
+pip install -r requirements.txt
+```
 
-- [ ] 데이터 폴더 구조 정리 -> 이건 단지 train 을위한 경로 지정
-- [ ] train/test split 파일 생성
-- [ ] Resampling 코드 생성
-- [ ] registration 코드 분리
-- [ ] affine/deformable registration ablation 정리
-- [ ] VoxelMorph/TransMorph 실험 코드 정리 -> 해도 되고 안해도 되고
-- [ ] TotalSegmentator 기반 Dice 평가 코드 정리
-- [ ] baseline model 목록 확정
-    - nnUNetv2, 3D UNet, 3D SAM adapter, transformer-based model
-- [ ] segmentation/detection evaluation script 정리
-- [ ] LangGraph 적용 여부 결정
+For the 3D SAM Adapter baseline, install the Segment Anything package and place
+the required pretrained checkpoints locally:
+
+```text
+ckpt/sam_vit_b_01ec64.pth
+snapshot/lits/last.pth.tar
+```
+
+These checkpoint paths can also be overridden from the command line.
+
+## Training
+
+### 3D U-Net
+
+```bash
+python main.py \
+  --model unet \
+  --data_type liver \
+  --epochs 100 \
+  --batch_size 4 \
+  --roi_size 96 128 128 \
+  --augment
+```
+
+### SwinUNETR
+
+```bash
+python main.py \
+  --model swinunetr \
+  --data_type liver \
+  --epochs 100 \
+  --batch_size 1 \
+  --roi_size 96 128 128 \
+  --feature_size 48 \
+  --use_checkpoint
+```
+
+### 3D SAM Adapter
+
+The 3D SAM Adapter uses a dedicated training loop because the model is composed
+of a SAM image encoder, prompt encoders, and a mask decoder rather than a single
+`model(image)` forward pass.
+
+```bash
+python main.py \
+  --model sam_adapter \
+  --data_type liver \
+  --epochs 100 \
+  --batch_size 1 \
+  --roi_size 128 128 128 \
+  --lr 4e-4 \
+  --sam_checkpoint ckpt/sam_vit_b_01ec64.pth \
+  --sam_pretrained_ckpt snapshot/lits/last.pth.tar
+```
+
+For this baseline, cubic crops are required by the reference training flow.
+`main.py` automatically overrides the crop size to `128 128 128` when needed.
+
+## Inference
+
+Direct PyTorch baselines can be run on one patient with:
+
+```bash
+python inference.py \
+  --model unet \
+  --checkpoint checkpoints/unet/best_model.pt \
+  --A /path/to/A.nii.gz \
+  --P /path/to/P.nii.gz \
+  --D /path/to/D.nii.gz \
+  --output_dir ./inference_outputs \
+  --save_probability
+```
+
+Sliding-window inference is enabled by default through MONAI.
+
+## nnUNetv2 Dataset Conversion
+
+The conversion script creates nnUNet-compatible raw datasets for original CT
+volumes and liver-extracted volumes:
+
+```bash
+python nnunetdataset.py --dataset all --dry_run
+python nnunetdataset.py --dataset all --overwrite
+```
+
+The intended layout is:
+
+```text
+nnUNet/nnUNet_raw/
+├── Dataset001/    # original CT phases
+└── Dataset002/    # liver-extracted phase volumes
+```
+
+Generated nnUNet folders are ignored by git.
+
+## LangGraph Pipeline
+
+`pipeline.ipynb` sketches the full patient-level inference workflow:
+
+1. Register A, P, and D phase volumes.
+2. Evaluate registration quality with liver Dice.
+3. Retry registration with alternate hyperparameters if liver Dice is below the threshold.
+4. Run tumor segmentation only after registration passes quality control.
+5. Save per-patient registration attempts, tumor predictions, metrics, and summaries.
+
+The target output layout is:
+
+```text
+Results/
+└── {subject}_{date}/
+    ├── registration/
+    │   └── attempt_*/
+    ├── tumor/
+    │   ├── unet/
+    │   ├── swinunetr/
+    │   ├── sam3d_adapter/
+    │   └── nnunetv2/
+    └── summary.json
+```
+
+## Metrics
+
+Validation includes:
+
+- Dice
+- IoU
+- lesion-level detection metrics
+  - F1 score
+  - sensitivity
+  - thresholded overlap from 10% to 50%
+
+## Version Control Notes
+
+Large or sensitive files are excluded from git:
+
+- NIfTI/DICOM medical images
+- nnUNet raw, preprocessed, and result folders
+- PyTorch checkpoints
+- SAM checkpoints
+- local Excel/CSV metadata
+- generated result folders
+
+Use local storage or an institutional artifact store for these files.
+
+## Development Workflow
+
+Optional pre-commit hooks are provided:
+
+```bash
+pip install pre-commit ruff
+pre-commit install
+```
+
+After that, commits will automatically run lightweight formatting and safety
+checks before changes are recorded.
+
+### Optional Auto-Push
+
+Two local automation helpers are available.
+
+To automatically commit and push file changes while a watcher is running:
+
+```bash
+bash scripts/auto_push_on_change.sh 30
+```
+
+The number is the polling interval in seconds. The script respects `.gitignore`,
+so medical images, checkpoints, nnUNet outputs, and local metadata are not added
+to git.
+
+To push automatically after every manual commit:
+
+```bash
+bash scripts/install_auto_push_hook.sh
+```
+
+This installs a local `.git/hooks/post-commit` hook. Git hooks are local machine
+state and are not stored in the repository.
