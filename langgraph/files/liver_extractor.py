@@ -1,17 +1,18 @@
-import os
-import nibabel as nib
 import numpy as np
+import os
+import shutil
+
+import nibabel as nib
 from totalsegmentator.python_api import totalsegmentator
-from typing import Optional
 
 
 class LiverExtractor:
     """Extract liver region from CT images using TotalSegmentator"""
 
     PHASE_MAPPING = {
-        'A': 'liver_0001',
-        'P': 'liver_0002',
-        'D': 'liver_0003'
+        'A': 'A_liver',
+        'P': 'P_liver',
+        'D': 'D_liver'
     }
 
     def __init__(self,
@@ -20,21 +21,25 @@ class LiverExtractor:
                  attempt: int = 1):
         """
         Args:
-            input_folder : Patient input root folder
+            input_folder : Registration attempt folder or patient input root folder
             output_path  : 결과 저장 루트 (e.g. ./results/1043712)
             attempt      : Registration attempt number (1-indexed)
         """
         self.input_folder = input_folder
         self.attempt      = attempt
 
-        # CT 입력: output_path/register/attempt_{n}/
-        self.regis_folder = os.path.join(output_path, "register", f"attempt_{attempt}")
+        if all(os.path.exists(os.path.join(input_folder, f"{phase}.nii.gz")) for phase in ["A", "P", "D"]):
+            self.regis_folder = input_folder
+            self.attempt_folder = input_folder
+        else:
+            self.attempt_folder = os.path.join(output_path, "registration", f"attempt_{attempt}")
+            self.regis_folder = self.attempt_folder
 
-        # TotalSegmentator 결과: output_path/total/
-        self.total_folder = os.path.join(output_path, "total")
+        # TotalSegmentator masks are saved inside each registration attempt.
+        self.total_folder = os.path.join(self.attempt_folder, "liver_masks")
 
-        # Liver masked image: output_path/liver/
-        self.liver_folder = os.path.join(output_path, "liver")
+        # Liver-only images are saved inside each registration attempt.
+        self.liver_folder = os.path.join(self.attempt_folder, "liver_images")
 
         os.makedirs(self.total_folder, exist_ok=True)
         os.makedirs(self.liver_folder, exist_ok=True)
@@ -43,10 +48,14 @@ class LiverExtractor:
         """TotalSegmentator로 liver 분할 (registered CT 사용)"""
         input_path  = os.path.join(self.regis_folder, f"{phase}.nii.gz")
         output_path = os.path.join(self.total_folder, phase)
+        liver_mask_path = os.path.join(output_path, "liver.nii.gz")
 
         if not os.path.exists(input_path):
             print(f"  Error: Input file not found: {input_path}")
             return False
+        if os.path.exists(liver_mask_path):
+            print(f"  Reusing existing liver mask for phase {phase}: {liver_mask_path}")
+            return True
 
         print(f"  Running TotalSegmentator for phase {phase}...")
         try:
@@ -97,7 +106,10 @@ class LiverExtractor:
             print(f"  Error creating liver-masked image: {e}")
             return False
 
-    def run(self, phase: str) -> bool:
+    def run(self, phase: str = None):
+        if phase is None:
+            return self.run_all()
+
         print(f"\n  Processing phase {phase}...")
         if not self.extract_segmentation(phase):
             return False
@@ -108,6 +120,7 @@ class LiverExtractor:
 
     def run_all(self) -> dict:
         results = {}
+        mask_paths = {}
         print("\n" + "=" * 60)
         print("Liver Extraction Pipeline")
         print("=" * 60)
@@ -117,12 +130,22 @@ class LiverExtractor:
 
         for phase in ['A', 'P', 'D']:
             results[phase] = self.run(phase)
+            if results[phase]:
+                mask_paths[phase] = os.path.join(self.total_folder, phase, "liver.nii.gz")
+
+        portal_mask = mask_paths.get("P")
+        if portal_mask and os.path.exists(portal_mask):
+            representative_mask = os.path.join(self.attempt_folder, "liver.nii.gz")
+            shutil.copy2(portal_mask, representative_mask)
+            print(f"  ✓ Saved representative liver mask: {representative_mask}")
 
         success_count = sum(results.values())
         print("\n" + "=" * 60)
         print(f"Summary: {success_count}/3 phases completed successfully")
         print("=" * 60)
-        return results
+        if success_count != 3:
+            return {}
+        return mask_paths
 
     def verify_outputs(self) -> bool:
         expected_files = [f"{self.PHASE_MAPPING[p]}.nii.gz" for p in ['A', 'P', 'D']]

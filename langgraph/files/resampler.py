@@ -85,7 +85,15 @@ class Resampler:
         return new_img
 
     def run(self):
-        nifti_files = self.get_nifti_files(self.input_folder)
+        expected_files = [
+            os.path.join(self.input_folder, f"{phase}.nii.gz")
+            for phase in self.phase_names
+        ]
+        if all(os.path.exists(path) for path in expected_files):
+            nifti_files = expected_files
+        else:
+            nifti_files = self.get_nifti_files(self.input_folder)
+
         if not nifti_files:
             print(f"  No NIfTI files found in {self.input_folder}")
             return

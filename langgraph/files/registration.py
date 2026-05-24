@@ -1,6 +1,6 @@
 """
 Multi-phase CT Registration
-- output_path/register/attempt_{n}/ 에 저장
+- output_path/registration/attempt_{n}/ 에 저장
 """
 import os
 import numpy as np
@@ -176,7 +176,7 @@ class Registration:
             portal_image, delayed_image, "Delayed"
         )
 
-        # output_path/register/attempt_{n}/ 에 저장
+        # output_path/registration/attempt_{n}/ 에 저장
         sitk.WriteImage(portal_image,        os.path.join(attempt_dir, "P.nii.gz"))
         sitk.WriteImage(arterial_registered, os.path.join(attempt_dir, "A.nii.gz"))
         sitk.WriteImage(delayed_registered,  os.path.join(attempt_dir, "D.nii.gz"))
