@@ -151,8 +151,8 @@ def main():
 
     # 3DSAMAdapter arguments. This model uses the official encoder/prompt/decoder
     # training path instead of the generic Trainer.forward(image) loop.
-    parser.add_argument("--sam_checkpoint", default="ckpt/sam_vit_b_01ec64.pth")
-    parser.add_argument("--sam_pretrained_ckpt", default="./snapshot/lits/last.pth.tar")
+    parser.add_argument("--sam_checkpoint", default="./train/models/3DSAMAdapter/ckpt/sam_vit_b_01ec64.pth")
+    parser.add_argument("--sam_pretrained_ckpt", default="./train/models/3DSAMAdapter/lits/last.pth.tar")
     parser.add_argument("--sam_eval_interval", type=int, default=None)
     parser.add_argument("--sam_num_pos_points", type=int, default=10)
     parser.add_argument("--sam_num_neg_points", type=int, default=20)

@@ -1,7 +1,10 @@
-import torch
+import json
+import os
 import time
-import os, tqdm
+
 import numpy as np
+import torch
+import tqdm
 
 from torch.utils.data import DataLoader
 
@@ -281,6 +284,80 @@ class Trainer:
             "detection": self._summarize_detection_metrics(detection_counts),
         }
 
+    def _save_training_plot(self, history):
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+        except ImportError:
+            return None
+
+        output_dir = getattr(self.args, "output_dir", "checkpoints")
+        os.makedirs(output_dir, exist_ok=True)
+
+        epochs = np.arange(1, len(history) + 1)
+        train_losses = [entry["train_loss"] for entry in history]
+        val_losses = [entry["val"]["loss"] if entry["val"] else np.nan for entry in history]
+        val_dices = [entry["val"]["dice"] if entry["val"] else np.nan for entry in history]
+
+        has_val = any(entry["val"] is not None for entry in history)
+        detection_thresholds = []
+        for entry in history:
+            if entry["val"] is not None:
+                detection_thresholds = sorted(entry["val"]["detection"].keys())
+                break
+        has_detection = bool(detection_thresholds)
+
+        n_panels = 1 + (1 if has_val else 0) + (1 if has_detection else 0)
+        fig, axes = plt.subplots(n_panels, 1, figsize=(8, 4 * n_panels))
+        if n_panels == 1:
+            axes = [axes]
+
+        axes[0].plot(epochs, train_losses, label="train_loss", marker="o", markersize=3)
+        if has_val:
+            axes[0].plot(epochs, val_losses, label="val_loss", marker="s", markersize=3)
+        axes[0].set_xlabel("epoch")
+        axes[0].set_ylabel("loss")
+        axes[0].set_title("Loss")
+        axes[0].legend()
+        axes[0].grid(True, alpha=0.3)
+
+        panel_idx = 1
+        if has_val:
+            axes[panel_idx].plot(epochs, val_dices, label="val_dice", marker="o", color="green", markersize=3)
+            axes[panel_idx].set_xlabel("epoch")
+            axes[panel_idx].set_ylabel("dice")
+            axes[panel_idx].set_title("Val Dice")
+            axes[panel_idx].set_ylim(0.0, 1.0)
+            axes[panel_idx].legend()
+            axes[panel_idx].grid(True, alpha=0.3)
+            panel_idx += 1
+
+        if has_detection:
+            for threshold in detection_thresholds:
+                f1_series = [
+                    entry["val"]["detection"][threshold]["f1"] if entry["val"] else np.nan
+                    for entry in history
+                ]
+                axes[panel_idx].plot(epochs, f1_series, label=f"f1@{threshold:.1f}", marker="o", markersize=3)
+            axes[panel_idx].set_xlabel("epoch")
+            axes[panel_idx].set_ylabel("f1")
+            axes[panel_idx].set_title("Detection F1")
+            axes[panel_idx].set_ylim(0.0, 1.0)
+            axes[panel_idx].legend()
+            axes[panel_idx].grid(True, alpha=0.3)
+
+        fig.tight_layout()
+        path = os.path.join(output_dir, "training_curves.png")
+        fig.savefig(path, dpi=120)
+        plt.close(fig)
+
+        history_path = os.path.join(output_dir, "training_history.json")
+        with open(history_path, "w", encoding="utf-8") as f:
+            json.dump(history, f, indent=2)
+
+        return path
+
     def save_checkpoint(self, epoch, train_loss, val_metrics=None):
         output_dir = getattr(self.args, "output_dir", "checkpoints")
         os.makedirs(output_dir, exist_ok=True)
@@ -344,8 +421,8 @@ class Trainer:
                 for threshold, metrics in val_metrics["detection"].items():
                     message += (
                         f" det@{threshold:.1f}"
-                        f"_f1: {metrics['f1']:.4f}"
-                        f"_sens: {metrics['sensitivity']:.4f}"
+                        f" f1: {metrics['f1']:.4f}"
+                        f" sens: {metrics['sensitivity']:.4f}"
                     )
 
                 if val_metrics["dice"] > best_score:
@@ -359,6 +436,7 @@ class Trainer:
             else:
                 print(message)
 
+            self._save_training_plot(history)
             self.scheduler.step()
 
         return history

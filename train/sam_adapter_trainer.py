@@ -1,4 +1,5 @@
 import importlib
+import json
 import os
 import shutil
 from functools import partial
@@ -144,6 +145,130 @@ def _sample_prompt_points(seg, num_pos, num_neg, device):
     return torch.cat([points_torch, negative_points], dim=1)
 
 
+def _connected_components(mask):
+    from scipy.ndimage import label
+
+    structure = np.ones((3, 3, 3), dtype=np.uint8)
+    labeled_mask, num_components = label(mask.astype(bool), structure=structure)
+    return labeled_mask, num_components
+
+
+def _lesion_detection_counts(pred_mask, target_mask, thresholds):
+    pred_components, num_pred = _connected_components(pred_mask)
+    target_components, num_target = _connected_components(target_mask)
+
+    counts = {
+        threshold: {"tp": 0, "fp": num_pred, "fn": num_target}
+        for threshold in thresholds
+    }
+    if num_pred == 0 or num_target == 0:
+        return counts
+
+    pairs = []
+    for target_id in range(1, num_target + 1):
+        target_component = target_components == target_id
+        target_volume = target_component.sum()
+
+        overlapping_pred_ids = np.unique(pred_components[target_component])
+        overlapping_pred_ids = overlapping_pred_ids[overlapping_pred_ids > 0]
+
+        for pred_id in overlapping_pred_ids:
+            pred_component = pred_components == pred_id
+            intersection = np.logical_and(target_component, pred_component).sum()
+            union = target_volume + pred_component.sum() - intersection
+            overlap = intersection / union if union > 0 else 0.0
+            pairs.append((overlap, target_id, pred_id))
+
+    pairs.sort(reverse=True)
+
+    for threshold in thresholds:
+        matched_targets = set()
+        matched_preds = set()
+
+        for overlap, target_id, pred_id in pairs:
+            if overlap < threshold:
+                break
+            if target_id in matched_targets or pred_id in matched_preds:
+                continue
+            matched_targets.add(target_id)
+            matched_preds.add(pred_id)
+
+        tp = len(matched_targets)
+        fp = num_pred - tp
+        fn = num_target - tp
+        counts[threshold] = {"tp": tp, "fp": fp, "fn": fn}
+
+    return counts
+
+
+def _summarize_detection_metrics(counts):
+    metrics = {}
+    for threshold, values in counts.items():
+        tp = values["tp"]
+        fp = values["fp"]
+        fn = values["fn"]
+
+        precision = tp / (tp + fp) if tp + fp > 0 else 0.0
+        sensitivity = tp / (tp + fn) if tp + fn > 0 else 0.0
+        f1 = 2.0 * precision * sensitivity / (precision + sensitivity) if precision + sensitivity > 0 else 0.0
+
+        metrics[threshold] = {
+            "precision": precision,
+            "sensitivity": sensitivity,
+            "f1": f1,
+            "tp": tp,
+            "fp": fp,
+            "fn": fn,
+        }
+
+    return metrics
+
+
+def _crop_prompt_patch(img, seg, patch_size, device):
+    """Crop a cubic patch centered at a random GT foreground voxel.
+
+    Returns ``(img_patch, seg_patch)`` both shaped ``(1, C, P, P, P)`` where
+    ``P = patch_size``, zero-padded when the chosen center is near the volume
+    boundary. Falls back to the volume center when ``seg`` has no foreground.
+    """
+    if seg.ndim == 4:
+        seg_view = seg.unsqueeze(1)
+    else:
+        seg_view = seg
+
+    D, H, W = seg_view.shape[2], seg_view.shape[3], seg_view.shape[4]
+    fg = torch.where(seg_view[0, 0] == 1)
+    if fg[0].numel() == 0:
+        cd, ch, cw = D // 2, H // 2, W // 2
+    else:
+        idx = int(np.random.choice(np.arange(fg[0].numel()), 1)[0])
+        cd, ch, cw = int(fg[0][idx]), int(fg[1][idx]), int(fg[2][idx])
+
+    half = patch_size // 2
+    d_min, d_max = cd - half, cd + half
+    h_min, h_max = ch - half, ch + half
+    w_min, w_max = cw - half, cw + half
+
+    d_l = max(0, -d_min)
+    d_r = max(0, d_max - D)
+    h_l = max(0, -h_min)
+    h_r = max(0, h_max - H)
+    w_l = max(0, -w_min)
+    w_r = max(0, w_max - W)
+
+    d_min_c = max(0, d_min)
+    h_min_c = max(0, h_min)
+    w_min_c = max(0, w_min)
+
+    img_patch = img[:, :, d_min_c:d_max, h_min_c:h_max, w_min_c:w_max].clone()
+    seg_patch = seg_view[:, :, d_min_c:d_max, h_min_c:h_max, w_min_c:w_max].clone()
+
+    img_patch = F.pad(img_patch, (w_l, w_r, h_l, h_r, d_l, d_r))
+    seg_patch = F.pad(seg_patch, (w_l, w_r, h_l, h_r, d_l, d_r))
+
+    return img_patch.to(device), seg_patch.to(device)
+
+
 def _forward_3dsam(img_encoder, prompt_encoder_list, mask_decoder, img, seg, patch_size, device,
                    num_pos=10, num_neg=20):
     out = F.interpolate(
@@ -180,6 +305,70 @@ def _forward_3dsam(img_encoder, prompt_encoder_list, mask_decoder, img, seg, pat
     return masks.permute(0, 1, 4, 2, 3)
 
 
+def _save_training_plot(history, output_dir):
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        return None
+
+    os.makedirs(output_dir, exist_ok=True)
+    epochs = [entry["epoch"] for entry in history]
+    train_losses = [entry["train_loss"] for entry in history]
+    val_losses = [
+        entry["val_loss"] if entry["val_loss"] is not None else float("nan")
+        for entry in history
+    ]
+    has_val = any(entry["val_loss"] is not None for entry in history)
+
+    detection_thresholds = []
+    for entry in history:
+        if entry.get("detection"):
+            detection_thresholds = sorted(entry["detection"].keys())
+            break
+    has_detection = bool(detection_thresholds)
+
+    n_panels = 1 + (1 if has_detection else 0)
+    fig, axes = plt.subplots(n_panels, 1, figsize=(8, 4 * n_panels))
+    if n_panels == 1:
+        axes = [axes]
+
+    axes[0].plot(epochs, train_losses, label="train_loss", marker="o", markersize=3)
+    if has_val:
+        axes[0].plot(epochs, val_losses, label="val_loss", marker="s", markersize=3)
+    axes[0].set_xlabel("epoch")
+    axes[0].set_ylabel("loss")
+    axes[0].set_title("3D SAM Adapter Loss")
+    axes[0].legend()
+    axes[0].grid(True, alpha=0.3)
+
+    if has_detection:
+        for threshold in detection_thresholds:
+            f1_series = [
+                entry["detection"][threshold]["f1"] if entry.get("detection") else float("nan")
+                for entry in history
+            ]
+            axes[1].plot(epochs, f1_series, label=f"f1@{threshold:.1f}", marker="o", markersize=3)
+        axes[1].set_xlabel("epoch")
+        axes[1].set_ylabel("f1")
+        axes[1].set_title("Detection F1 (patch-level)")
+        axes[1].set_ylim(0.0, 1.0)
+        axes[1].legend()
+        axes[1].grid(True, alpha=0.3)
+
+    fig.tight_layout()
+    path = os.path.join(output_dir, "training_curves.png")
+    fig.savefig(path, dpi=120)
+    plt.close(fig)
+
+    history_path = os.path.join(output_dir, "training_history.json")
+    with open(history_path, "w", encoding="utf-8") as f:
+        json.dump(history, f, indent=2)
+
+    return path
+
+
 def _save_checkpoint(state, is_best, checkpoint_dir):
     os.makedirs(checkpoint_dir, exist_ok=True)
     last_path = os.path.join(checkpoint_dir, "last.pth.tar")
@@ -191,7 +380,7 @@ def _save_checkpoint(state, is_best, checkpoint_dir):
         shutil.copyfile(last_path, best_tar_path)
         shutil.copyfile(last_path, best_model_path)
 
-    return last_path
+    return last_path 
 
 
 def _make_loader(args, A, P, D, label, mode):
@@ -247,7 +436,7 @@ def train_sam_adapter(args, train_paths, val_paths=None, logger=None):
     if logger is not None:
         logger.info("Building 3DSAMAdapter from SAM ViT-B and pretrained 3D adapter weights.")
 
-    sam_state = _load_sam_image_encoder_state(getattr(args, "sam_checkpoint", "ckpt/sam_vit_b_01ec64.pth"))
+    sam_state = _load_sam_image_encoder_state(getattr(args, "sam_checkpoint", "./models/3DSAMAdapter/ckpt/sam_vit_b_01ec64.pth"))
     pretrained_state = _load_pretrained_state(
         getattr(args, "sam_pretrained_ckpt", "./snapshot/lits/last.pth.tar")
     )
@@ -377,6 +566,7 @@ def train_sam_adapter(args, train_paths, val_paths=None, logger=None):
 
         mean_train_loss = float(np.mean(train_losses)) if train_losses else np.inf
         val_loss = None
+        detection_metrics = None
 
         if val_loader is not None and (epoch + 1) % eval_interval == 0:
             img_encoder.eval()
@@ -384,26 +574,49 @@ def train_sam_adapter(args, train_paths, val_paths=None, logger=None):
             for module in prompt_encoder_list:
                 module.eval()
 
+            detection_thresholds = tuple(
+                getattr(args, "detection_thresholds", [0.1, 0.2, 0.3, 0.4, 0.5])
+            )
+            detection_counts = {
+                threshold: {"tp": 0, "fp": 0, "fn": 0}
+                for threshold in detection_thresholds
+            }
+
             val_losses = []
             with torch.no_grad():
                 for batch in val_loader:
                     img = batch["image"].to(device)
                     seg = batch["label"].to(device).long()
+                    img_patch, seg_patch = _crop_prompt_patch(img, seg, patch_size, device)
                     masks = _forward_3dsam(
                         img_encoder,
                         prompt_encoder_list,
                         mask_decoder,
-                        img,
-                        seg,
+                        img_patch,
+                        seg_patch,
                         patch_size,
                         device,
                         num_pos=getattr(args, "sam_num_pos_points", 10),
                         num_neg=getattr(args, "sam_val_num_neg_points", 10),
                     )
-                    loss = val_loss_cal(masks, seg)
+                    loss = val_loss_cal(masks, seg_patch)
                     val_losses.append(float(loss.detach().cpu().mean()))
 
+                    pred_mask = (torch.softmax(masks, dim=1)[:, 1] > 0.5).cpu().numpy().astype(bool)
+                    target_np = (seg_patch[:, 0].cpu().numpy() > 0.5)
+                    for sample_index in range(pred_mask.shape[0]):
+                        sample_counts = _lesion_detection_counts(
+                            pred_mask[sample_index],
+                            target_np[sample_index],
+                            detection_thresholds,
+                        )
+                        for threshold in detection_thresholds:
+                            detection_counts[threshold]["tp"] += sample_counts[threshold]["tp"]
+                            detection_counts[threshold]["fp"] += sample_counts[threshold]["fp"]
+                            detection_counts[threshold]["fn"] += sample_counts[threshold]["fn"]
+
             val_loss = float(np.mean(val_losses)) if val_losses else np.inf
+            detection_metrics = _summarize_detection_metrics(detection_counts)
             is_best = val_loss < best_loss
             if is_best:
                 best_loss = val_loss
@@ -425,11 +638,24 @@ def train_sam_adapter(args, train_paths, val_paths=None, logger=None):
                 checkpoint_dir=output_dir,
             )
 
-        history.append({"epoch": epoch + 1, "train_loss": mean_train_loss, "val_loss": val_loss})
+        history.append({
+            "epoch": epoch + 1,
+            "train_loss": mean_train_loss,
+            "val_loss": val_loss,
+            "detection": detection_metrics,
+        })
+        _save_training_plot(history, output_dir)
         if logger is not None:
             message = f"3DSAMAdapter epoch {epoch + 1}/{max_epochs} train_loss: {mean_train_loss:.6f}"
             if val_loss is not None:
                 message += f" val_loss: {val_loss:.6f} best: {best_loss:.6f} at epoch {best_epoch}"
+            if detection_metrics is not None:
+                for threshold, metrics in detection_metrics.items():
+                    message += (
+                        f" det@{threshold:.1f}"
+                        f"_f1: {metrics['f1']:.4f}"
+                        f"_sens: {metrics['sensitivity']:.4f}"
+                    )
             logger.info(message)
 
     return {
