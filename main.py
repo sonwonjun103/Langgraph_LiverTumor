@@ -172,9 +172,12 @@ def main():
     parser.add_argument("--nnunet_extra_args", nargs=argparse.REMAINDER, default=[],
                         help="Extra args forwarded to nnUNetv2_train (e.g. --c to resume). "
                              "Must come last on the command line.")
-    parser.add_argument("--nnunet_raw", default=None)
-    parser.add_argument("--nnunet_preprocessed", default=None)
-    parser.add_argument("--nnunet_results", default=None)
+    parser.add_argument("--nnunet_raw",
+                        default="/home/sonwonjun/research/Liver/finalcode/nnUNet/nnUNet_raw")
+    parser.add_argument("--nnunet_preprocessed",
+                        default="/home/sonwonjun/research/Liver/finalcode/nnUNet/nnUNet_preprocessed")
+    parser.add_argument("--nnunet_results",
+                        default="/home/sonwonjun/research/Liver/finalcode/nnUNet/nnUNet_results")
     parser.add_argument("--nnunet_log_dir", default=None,
                         help="Directory for per-fold logs. Defaults to <output_dir>/logs.")
 
