@@ -320,7 +320,12 @@ def _save_training_plot(history, output_dir):
         entry["val_loss"] if entry["val_loss"] is not None else float("nan")
         for entry in history
     ]
+    val_dices = [
+        entry.get("val_dice") if entry.get("val_dice") is not None else float("nan")
+        for entry in history
+    ]
     has_val = any(entry["val_loss"] is not None for entry in history)
+    has_val_dice = any(entry.get("val_dice") is not None for entry in history)
 
     detection_thresholds = []
     for entry in history:
@@ -329,7 +334,7 @@ def _save_training_plot(history, output_dir):
             break
     has_detection = bool(detection_thresholds)
 
-    n_panels = 1 + (1 if has_detection else 0)
+    n_panels = 1 + (1 if has_val_dice else 0) + (1 if has_detection else 0)
     fig, axes = plt.subplots(n_panels, 1, figsize=(8, 4 * n_panels))
     if n_panels == 1:
         axes = [axes]
@@ -343,19 +348,30 @@ def _save_training_plot(history, output_dir):
     axes[0].legend()
     axes[0].grid(True, alpha=0.3)
 
+    panel_idx = 1
+    if has_val_dice:
+        axes[panel_idx].plot(epochs, val_dices, label="val_dice", marker="o", color="green", markersize=3)
+        axes[panel_idx].set_xlabel("epoch")
+        axes[panel_idx].set_ylabel("dice")
+        axes[panel_idx].set_title("Val Dice (patch-level)")
+        axes[panel_idx].set_ylim(0.0, 1.0)
+        axes[panel_idx].legend()
+        axes[panel_idx].grid(True, alpha=0.3)
+        panel_idx += 1
+
     if has_detection:
         for threshold in detection_thresholds:
             f1_series = [
                 entry["detection"][threshold]["f1"] if entry.get("detection") else float("nan")
                 for entry in history
             ]
-            axes[1].plot(epochs, f1_series, label=f"f1@{threshold:.1f}", marker="o", markersize=3)
-        axes[1].set_xlabel("epoch")
-        axes[1].set_ylabel("f1")
-        axes[1].set_title("Detection F1 (patch-level)")
-        axes[1].set_ylim(0.0, 1.0)
-        axes[1].legend()
-        axes[1].grid(True, alpha=0.3)
+            axes[panel_idx].plot(epochs, f1_series, label=f"f1@{threshold:.1f}", marker="o", markersize=3)
+        axes[panel_idx].set_xlabel("epoch")
+        axes[panel_idx].set_ylabel("f1")
+        axes[panel_idx].set_title("Detection F1 (patch-level)")
+        axes[panel_idx].set_ylim(0.0, 1.0)
+        axes[panel_idx].legend()
+        axes[panel_idx].grid(True, alpha=0.3)
 
     fig.tight_layout()
     path = os.path.join(output_dir, "training_curves.png")
@@ -566,6 +582,7 @@ def train_sam_adapter(args, train_paths, val_paths=None, logger=None):
 
         mean_train_loss = float(np.mean(train_losses)) if train_losses else np.inf
         val_loss = None
+        val_dice = None
         detection_metrics = None
 
         if val_loader is not None and (epoch + 1) % eval_interval == 0:
@@ -574,6 +591,9 @@ def train_sam_adapter(args, train_paths, val_paths=None, logger=None):
             for module in prompt_encoder_list:
                 module.eval()
 
+            from monai.metrics import DiceMetric
+
+            dice_metric = DiceMetric(include_background=True, reduction="mean")
             detection_thresholds = tuple(
                 getattr(args, "detection_thresholds", [0.1, 0.2, 0.3, 0.4, 0.5])
             )
@@ -602,7 +622,12 @@ def train_sam_adapter(args, train_paths, val_paths=None, logger=None):
                     loss = val_loss_cal(masks, seg_patch)
                     val_losses.append(float(loss.detach().cpu().mean()))
 
-                    pred_mask = (torch.softmax(masks, dim=1)[:, 1] > 0.5).cpu().numpy().astype(bool)
+                    pred_prob = torch.softmax(masks, dim=1)[:, 1:2]
+                    pred_binary = (pred_prob > 0.5).float()
+                    target_binary = (seg_patch > 0.5).float()
+                    dice_metric(y_pred=pred_binary, y=target_binary)
+
+                    pred_mask = pred_binary[:, 0].cpu().numpy().astype(bool)
                     target_np = (seg_patch[:, 0].cpu().numpy() > 0.5)
                     for sample_index in range(pred_mask.shape[0]):
                         sample_counts = _lesion_detection_counts(
@@ -616,6 +641,8 @@ def train_sam_adapter(args, train_paths, val_paths=None, logger=None):
                             detection_counts[threshold]["fn"] += sample_counts[threshold]["fn"]
 
             val_loss = float(np.mean(val_losses)) if val_losses else np.inf
+            val_dice = float(dice_metric.aggregate().item())
+            dice_metric.reset()
             detection_metrics = _summarize_detection_metrics(detection_counts)
             is_best = val_loss < best_loss
             if is_best:
@@ -642,6 +669,7 @@ def train_sam_adapter(args, train_paths, val_paths=None, logger=None):
             "epoch": epoch + 1,
             "train_loss": mean_train_loss,
             "val_loss": val_loss,
+            "val_dice": val_dice,
             "detection": detection_metrics,
         })
         _save_training_plot(history, output_dir)
@@ -649,6 +677,8 @@ def train_sam_adapter(args, train_paths, val_paths=None, logger=None):
             message = f"3DSAMAdapter epoch {epoch + 1}/{max_epochs} train_loss: {mean_train_loss:.6f}"
             if val_loss is not None:
                 message += f" val_loss: {val_loss:.6f} best: {best_loss:.6f} at epoch {best_epoch}"
+            if val_dice is not None:
+                message += f" val_dice: {val_dice:.4f}"
             if detection_metrics is not None:
                 for threshold, metrics in detection_metrics.items():
                     message += (
