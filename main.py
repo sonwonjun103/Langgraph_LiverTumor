@@ -92,7 +92,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--model",
-        choices=["unet", "swinunetr", "sam_adapter"],
+        choices=["unet", "swinunetr", "sam_adapter", "nnunetv2"],
         default="unet",
         help="Baseline model for 3-phase liver tumor segmentation.",
     )
@@ -115,7 +115,7 @@ def main():
     parser.add_argument("--weight_decay", type=float, default=1e-5)
     parser.add_argument("--dice_weight", type=float, default=1.0)
     parser.add_argument("--bce_weight", type=float, default=1.0)
-    parser.add_argument("--window", type=float, nargs=2, default=(-200, 300))
+    parser.add_argument("--window", type=float, nargs=2, default=(0, 150))
     parser.add_argument(
         "--detection_thresholds",
         type=float,
@@ -160,11 +160,35 @@ def main():
     parser.add_argument("--sam_dice_weight", type=float, default=0.5)
     parser.add_argument("--sam_ce_weight", type=float, default=0.5)
 
+    # nnUNetv2 arguments. Used only when --model nnunetv2. nnUNetv2 manages its
+    # own data layout via the nnUNet_raw/preprocessed/results env vars, so
+    # alldata_metrics.xlsx is not consulted in this mode.
+    parser.add_argument("--nnunet_dataset", default="001",
+                        help="Dataset id passed to nnUNetv2_train (e.g. 001, 002).")
+    parser.add_argument("--nnunet_config", default="3d_fullres",
+                        help="nnUNetv2 configuration (3d_fullres, 3d_lowres, 2d, ...).")
+    parser.add_argument("--nnunet_folds", type=int, nargs="+", default=[0, 1, 2, 3, 4],
+                        help="Folds to train sequentially.")
+    parser.add_argument("--nnunet_extra_args", nargs=argparse.REMAINDER, default=[],
+                        help="Extra args forwarded to nnUNetv2_train (e.g. --c to resume). "
+                             "Must come last on the command line.")
+    parser.add_argument("--nnunet_raw", default=None)
+    parser.add_argument("--nnunet_preprocessed", default=None)
+    parser.add_argument("--nnunet_results", default=None)
+    parser.add_argument("--nnunet_log_dir", default=None,
+                        help="Directory for per-fold logs. Defaults to <output_dir>/logs.")
+
     parser.add_argument("--output_dir", default="./checkpoints")
     args = parser.parse_args()
     args.output_dir = os.path.join(args.output_dir, args.model)
     logger = setup_logger(args.output_dir, name=f"train_{args.model}")
     logger.info(f"Arguments: {vars(args)}")
+
+    if args.model == "nnunetv2":
+        from train.nnunetv2_runner import train_nnunetv2_all_folds
+
+        train_nnunetv2_all_folds(args=args, logger=logger)
+        return
 
     # 데이터 정보 읽기
     alldata = pd.read_excel(args.excel_path)
