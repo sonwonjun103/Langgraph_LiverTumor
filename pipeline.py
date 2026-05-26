@@ -141,20 +141,20 @@ def get_case_from_row(row: pd.Series, cfg: PipelineConfig) -> Dict[str, Any]:
         source_dir = Path(cfg.data_root1) / subject / date
         case_id = f"{subject}_{date}"
 
-    data_type = getattr(cfg, "data_type", "ct")
-    if data_type == "liver":
-        a_name, p_name, d_name = "AliverAv.nii.gz", "PliverPv.nii.gz", "DliverDv.nii.gz"
-    else:
-        a_name, p_name, d_name = "A.nii.gz", "P.nii.gz", "D.nii.gz"
-
     return {
         "subject": subject,
         "date": date,
         "case_id": case_id,
         "source_dir": str(source_dir),
-        "A": str(source_dir / a_name),
-        "P": str(source_dir / p_name),
-        "D": str(source_dir / d_name),
+        # CT phases (registration + ct-mode tumor input)
+        "A": str(source_dir / "A.nii.gz"),
+        "P": str(source_dir / "P.nii.gz"),
+        "D": str(source_dir / "D.nii.gz"),
+        # Liver-cropped phases produced at training time (initial liver gate +
+        # liver-mode tumor input when no registration runs)
+        "A_liver": str(source_dir / "AliverAv.nii.gz"),
+        "P_liver": str(source_dir / "PliverPv.nii.gz"),
+        "D_liver": str(source_dir / "DliverDv.nii.gz"),
         "label": str(source_dir / "label.nii.gz"),
     }
 
@@ -234,6 +234,15 @@ def dicom_to_nifti(dicom_path: str | Path, output_path: str | Path) -> str:
 
 
 def prepare_phase_inputs(case: Dict[str, Any], case_result_dir: Path, cfg: PipelineConfig) -> tuple[Path, str]:
+    """Stage both the CT phases and the training-side liver-cropped phases.
+
+    Layout after this step:
+      input_dir/{A,P,D}.nii.gz                        # CT (used for registration)
+      input_dir/liver_images/{A,P,D}_liver.nii.gz     # liver-cropped (used for the
+                                                       # initial liver gate and as
+                                                       # the model input when
+                                                       # cfg.data_type == "liver")
+    """
     input_format = infer_input_format(case, cfg)
 
     if input_format == "nifti":
@@ -241,6 +250,12 @@ def prepare_phase_inputs(case: Dict[str, Any], case_result_dir: Path, cfg: Pipel
         input_dir.mkdir(parents=True, exist_ok=True)
         for phase in ("A", "P", "D"):
             shutil.copy2(case[phase], input_dir / f"{phase}.nii.gz")
+        liver_dir = input_dir / "liver_images"
+        liver_dir.mkdir(parents=True, exist_ok=True)
+        for phase in ("A", "P", "D"):
+            liver_src = case.get(f"{phase}_liver")
+            if liver_src and Path(liver_src).exists():
+                shutil.copy2(liver_src, liver_dir / f"{phase}_liver.nii.gz")
         return input_dir, input_format
 
     if input_format == "dicom":
@@ -446,6 +461,36 @@ def evaluate_liver_gate(volume_dir: Path, cfg: PipelineConfig, stage: str, attem
     }
 
 
+def evaluate_initial_liver_gate(volume_dir: Path, cfg: PipelineConfig, stage: str, attempt: int, config_name: str) -> Dict[str, Any]:
+    """Initial liver gate that uses pre-existing liver-cropped files instead of
+    running TotalSegmentator. Expects volume_dir/liver_images/{A,P,D}_liver.nii.gz.
+    Falls back to ``evaluate_liver_gate`` (TotalSegmentator) when any of the
+    liver files is missing.
+    """
+    liver_dir = Path(volume_dir) / "liver_images"
+    mask_paths = {
+        "A": str(liver_dir / "A_liver.nii.gz"),
+        "P": str(liver_dir / "P_liver.nii.gz"),
+        "D": str(liver_dir / "D_liver.nii.gz"),
+    }
+    if not all(Path(p).exists() for p in mask_paths.values()):
+        return evaluate_liver_gate(volume_dir, cfg, stage, attempt, config_name)
+
+    dice_info = compute_liver_dice(mask_paths)
+    dice_info["attempt"] = attempt
+    dice_info["stage"] = stage
+    dice_info["threshold"] = cfg.liver_dice_threshold
+    write_json(Path(volume_dir) / "liver_dice.json", dice_info)
+    return {
+        "attempt": attempt,
+        "attempt_dir": str(volume_dir),
+        "stage": stage,
+        "registration_performed": False,
+        "liver_dice": dice_info,
+        "config": config_name,
+    }
+
+
 def run_registration_attempt(
     cfg: PipelineConfig,
     case_result_dir: Path,
@@ -471,8 +516,9 @@ def registration_loop_node(state: PipelineState) -> PipelineState:
     attempts = []
 
     if input_format == "nifti":
-        # NIfTI volumes are already available. First check liver consistency without resampling or registration.
-        initial_record = evaluate_liver_gate(
+        # NIfTI volumes are already available. The initial gate uses the
+        # pre-existing liver-cropped files (no TotalSegmentator).
+        initial_record = evaluate_initial_liver_gate(
             volume_dir=input_dir,
             cfg=cfg,
             stage="input_liver_check",

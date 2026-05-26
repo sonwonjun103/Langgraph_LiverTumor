@@ -12,14 +12,25 @@ from train.data.dataset import normalize_volume
 
 
 def resolve_phase_paths(attempt_dir, cfg) -> Tuple[Path, Path, Path]:
-    """Return (A, P, D) NIfTI paths under ``attempt_dir``.
+    """Return the (A, P, D) NIfTI paths a tumor model should consume.
 
-    The pipeline picks the right source file (CT vs liver-cropped) at the
-    case-loading step (see ``get_case_from_row``) and copies it into
-    ``input_dir/{A,P,D}.nii.gz``. After that everything downstream just reads
-    those fixed filenames, regardless of cfg.data_type.
+    The pipeline always stages two variants under each registration folder:
+      - ``attempt_dir/{A,P,D}.nii.gz``                  : the (registered) CT
+      - ``attempt_dir/liver_images/{A,P,D}_liver.nii.gz``: liver-cropped (CT * liver mask),
+        produced either by copying the training-side AliverAv/PliverPv/DliverDv
+        files (no-registration shortcut) or by LiverExtractor after registration.
+
+    ``cfg.data_type`` then selects which set the tumor models read.
     """
     attempt_dir = Path(attempt_dir)
+    data_type = getattr(cfg, "data_type", "ct")
+    if data_type == "liver":
+        liver_dir = attempt_dir / "liver_images"
+        return (
+            liver_dir / "A_liver.nii.gz",
+            liver_dir / "P_liver.nii.gz",
+            liver_dir / "D_liver.nii.gz",
+        )
     return (
         attempt_dir / "A.nii.gz",
         attempt_dir / "P.nii.gz",
