@@ -53,7 +53,7 @@ class Trainer:
                                      self.P,
                                      self.D,
                                      self.label,
-                                     window=getattr(self.args, "window", (-200, 300)),
+                                     window=getattr(self.args, "window", (0, 150)),
                                      mode="train",
                                      roi_size=getattr(self.args, "roi_size", (96, 128, 128)),
                                      samples_per_volume=getattr(self.args, "num_samples", 1),
@@ -70,7 +70,7 @@ class Trainer:
                                          self.val_P,
                                          self.val_D,
                                          self.val_label,
-                                         window=getattr(self.args, "window", (-200, 300)),
+                                         window=getattr(self.args, "window", (0, 150)),
                                          mode="val",
                                          roi_size=getattr(self.args, "roi_size", (96, 128, 128)))
         return self.val_dataset

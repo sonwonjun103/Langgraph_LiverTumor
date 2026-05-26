@@ -27,7 +27,7 @@ def normalize_volume(volume, window):
 class CustomDataset(Dataset):
     def __init__(self,
                  A, P, D, label,
-                 window=(-200, 300),
+                 window=(0, 150),
                  label_threshold=0,
                  mode="val",
                  roi_size=(96, 128, 128),

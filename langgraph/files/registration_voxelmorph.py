@@ -68,7 +68,7 @@ class VoxelMorphRegistration:
         output_path: str,
         model_path: str,
         device: str = None,
-        window: Tuple[float, float] = (-200.0, 300.0),
+        window: Tuple[float, float] = (0.0, 150.0),
         attempt: int = 0,
     ):
         self.input_folder = Path(input_folder)
