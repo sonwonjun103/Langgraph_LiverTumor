@@ -132,7 +132,7 @@ def main():
     )
     parser.add_argument("--num_samples", type=int, default=4)
     parser.add_argument("--pos_ratio", type=float, default=0.5)
-    parser.add_argument("--augment", action="store_true")
+    parser.add_argument("--augment", type=bool, default=True)
     parser.add_argument("--use_sliding_window", action="store_true", default=True)
     parser.add_argument("--no_sliding_window", dest="use_sliding_window", action="store_false")
     parser.add_argument("--sw_batch_size", type=int, default=4)
@@ -183,7 +183,11 @@ def main():
 
     parser.add_argument("--output_dir", default="./checkpoints")
     args = parser.parse_args()
-    args.output_dir = os.path.join(args.output_dir, args.model)
+    # Layer the output directory by model and then by data_type so checkpoints,
+    # training_curves.png, training_history.json, and the log file all live
+    # under the same data_type folder. nnUNetv2 manages its own data layout but
+    # we still nest it the same way for consistency.
+    args.output_dir = os.path.join(args.output_dir, args.model, args.data_type)
     logger = setup_logger(args.output_dir, name=f"train_{args.model}")
     logger.info(f"Arguments: {vars(args)}")
 
@@ -195,7 +199,8 @@ def main():
 
     # 데이터 정보 읽기
     alldata = pd.read_excel(args.excel_path)
-    alldata_sorted = alldata.sort_values("tumor_size").reset_index(drop=True)
+    alldata_sorted = alldata.sort_values("Mean1").reset_index(drop=True)
+    print(alldata_sorted)
 
     # test, train data 분리
     test_data = alldata_sorted.iloc[:args.test_size]

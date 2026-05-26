@@ -116,11 +116,11 @@ class PipelineConfig:
 
     def __post_init__(self):
         if self.checkpoints is None:
-            suffix = f"_{self.data_type}" if self.data_type else ""
+            dt = self.data_type or "ct"
             self.checkpoints = {
-                "unet": f"./checkpoints/unet/best_model{suffix}.pt",
-                "swinunetr": f"./checkpoints/swinunetr/best_model{suffix}.pt",
-                "sam3d_adapter": f"./checkpoints/sam_adapter/best_model{suffix}.pt",
+                "unet": f"./checkpoints/unet/{dt}/best_model.pt",
+                "swinunetr": f"./checkpoints/swinunetr/{dt}/best_model.pt",
+                "sam3d_adapter": f"./checkpoints/sam_adapter/{dt}/best_model.pt",
             }
 
 

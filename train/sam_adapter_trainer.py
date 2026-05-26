@@ -385,15 +385,16 @@ def _save_training_plot(history, output_dir):
     return path
 
 
-def _save_checkpoint(state, is_best, checkpoint_dir, data_type=None):
+def _save_checkpoint(state, is_best, checkpoint_dir):
+    # checkpoint_dir already encodes model/data_type (see main.py), so the
+    # filenames stay simple.
     os.makedirs(checkpoint_dir, exist_ok=True)
-    suffix = f"_{data_type}" if data_type else ""
-    last_path = os.path.join(checkpoint_dir, f"last{suffix}.pth.tar")
+    last_path = os.path.join(checkpoint_dir, "last.pth.tar")
     torch.save(state, last_path)
 
     if is_best:
-        best_tar_path = os.path.join(checkpoint_dir, f"best{suffix}.pth.tar")
-        best_model_path = os.path.join(checkpoint_dir, f"best_model{suffix}.pt")
+        best_tar_path = os.path.join(checkpoint_dir, "best.pth.tar")
+        best_model_path = os.path.join(checkpoint_dir, "best_model.pt")
         shutil.copyfile(last_path, best_tar_path)
         shutil.copyfile(last_path, best_model_path)
 
@@ -664,7 +665,6 @@ def train_sam_adapter(args, train_paths, val_paths=None, logger=None):
                 },
                 is_best=is_best,
                 checkpoint_dir=output_dir,
-                data_type=getattr(args, "data_type", None),
             )
 
         history.append({

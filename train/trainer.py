@@ -361,10 +361,9 @@ class Trainer:
     def save_checkpoint(self, epoch, train_loss, val_metrics=None):
         output_dir = getattr(self.args, "output_dir", "checkpoints")
         os.makedirs(output_dir, exist_ok=True)
-
-        data_type = getattr(self.args, "data_type", None)
-        suffix = f"_{data_type}" if data_type else ""
-        path = os.path.join(output_dir, f"best_model{suffix}.pt")
+        # output_dir already encodes model/data_type (see main.py), so the
+        # checkpoint filename is plain "best_model.pt".
+        path = os.path.join(output_dir, "best_model.pt")
         checkpoint = {
             "epoch": epoch,
             "model_state_dict": self.model.state_dict(),
