@@ -1,16 +1,18 @@
 """VoxelMorph-based deformable registration for the liver tumor pipeline.
 
-Drop-in alternative to the SimpleITK iterative registration. The Arterial
-phase is treated as the fixed image; the Portal Venous and Delayed phases
-are warped to align with it using a pre-trained VoxelMorph network.
+Drop-in alternative to the SimpleITK iterative registration. The Portal
+Venous phase is treated as the fixed image; the Arterial and Delayed phases
+are warped to align with it using a pre-trained VoxelMorph network. This
+matches the rest of the pipeline, where P is used as the reference frame
+(see ``resample_label_to_reference`` in ``pipeline.ipynb``).
 
 Inputs at ``input_folder``:
   - A.nii.gz, P.nii.gz, D.nii.gz
 
 Outputs at ``output_path / f"voxelmorph_attempt_{attempt}"``:
-  - A.nii.gz  (copy)
-  - P.nii.gz  (warped)
-  - D.nii.gz  (warped)
+  - A.nii.gz  (warped to P)
+  - P.nii.gz  (copy)
+  - D.nii.gz  (warped to P)
 """
 from __future__ import annotations
 
@@ -104,8 +106,8 @@ class VoxelMorphRegistration:
         attempt_dir = self.output_path / f"voxelmorph_attempt_{self.attempt}"
         attempt_dir.mkdir(parents=True, exist_ok=True)
 
-        a_image, a_array = _read_image(self.input_folder / "A.nii.gz")
-        _, p_array = _read_image(self.input_folder / "P.nii.gz")
+        _, a_array = _read_image(self.input_folder / "A.nii.gz")
+        p_image, p_array = _read_image(self.input_folder / "P.nii.gz")
         _, d_array = _read_image(self.input_folder / "D.nii.gz")
 
         a_norm = _normalize(a_array, self.window)
@@ -113,15 +115,16 @@ class VoxelMorphRegistration:
         d_norm = _normalize(d_array, self.window)
 
         model = self._load_model()
-        moved_p_norm = self._register_pair(model, a_norm, p_norm)
-        moved_d_norm = self._register_pair(model, a_norm, d_norm)
+        # P is the fixed/reference image; A and D are warped to align with P.
+        moved_a_norm = self._register_pair(model, fixed=p_norm, moving=a_norm)
+        moved_d_norm = self._register_pair(model, fixed=p_norm, moving=d_norm)
 
         low, high = self.window
-        moved_p = moved_p_norm * (high - low) + low
+        moved_a = moved_a_norm * (high - low) + low
         moved_d = moved_d_norm * (high - low) + low
 
-        _write_image_like(a_image, a_array, attempt_dir / "A.nii.gz")
-        _write_image_like(a_image, moved_p, attempt_dir / "P.nii.gz")
-        _write_image_like(a_image, moved_d, attempt_dir / "D.nii.gz")
+        _write_image_like(p_image, moved_a, attempt_dir / "A.nii.gz")
+        _write_image_like(p_image, p_array, attempt_dir / "P.nii.gz")
+        _write_image_like(p_image, moved_d, attempt_dir / "D.nii.gz")
 
         return str(attempt_dir)
