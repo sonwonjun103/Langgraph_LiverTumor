@@ -518,6 +518,11 @@ def registration_loop_node(state: PipelineState) -> PipelineState:
     if input_format == "nifti":
         # NIfTI volumes are already available. The initial gate uses the
         # pre-existing liver-cropped files (no TotalSegmentator).
+        liver_dir = input_dir / "liver_images"
+        liver_files_present = all(
+            (liver_dir / f"{p}_liver.nii.gz").exists() for p in ("A", "P", "D")
+        )
+
         initial_record = evaluate_initial_liver_gate(
             volume_dir=input_dir,
             cfg=cfg,
@@ -534,7 +539,9 @@ def registration_loop_node(state: PipelineState) -> PipelineState:
             state["attempts"] = attempts
             return state
 
-        start_attempt = 2
+        # liver files present  -> can skip attempt 1 (the no-op identity registration)
+        # liver files missing  -> start from attempt 1 because we have nothing aligned yet
+        start_attempt = 2 if liver_files_present else 1
         registration_input_folder = input_dir
     elif input_format == "dicom":
         # DICOM inputs are converted to NIfTI first, then resampled and registered from attempt 1.
