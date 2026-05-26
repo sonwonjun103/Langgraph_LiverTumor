@@ -15,7 +15,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from .inference_common import load_case, save_nifti
+from .inference_common import load_case, resolve_phase_paths, save_nifti
 
 
 def _load_adapter_modules():
@@ -144,12 +144,8 @@ def run_sam_adapter(
     device = torch.device(cfg.device)
     img_encoder, prompt_encoder_list, mask_decoder = _build_models(checkpoint_path, device)
 
-    image, reference_image = load_case(
-        attempt_dir / "A.nii.gz",
-        attempt_dir / "P.nii.gz",
-        attempt_dir / "D.nii.gz",
-        cfg.window,
-    )
+    a_path, p_path, d_path = resolve_phase_paths(attempt_dir, cfg)
+    image, reference_image = load_case(a_path, p_path, d_path, cfg.window)
     image = image.to(device)
 
     seg = _read_gt_volume(gt_path)

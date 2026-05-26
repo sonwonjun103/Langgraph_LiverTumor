@@ -62,6 +62,11 @@ class PipelineConfig:
     # auto: infer from A/P/D paths. nifti: start from liver Dice check. dicom: resample + registration attempt 1.
     input_format: str = "auto"
 
+    # Tumor inference input variant. Must match how the checkpoints were trained.
+    # "ct"    -> attempt_dir/{A,P,D}.nii.gz   (original registered CT)
+    # "liver" -> attempt_dir/liver_images/{A,P,D}_liver.nii.gz (CT * liver mask)
+    data_type: str = "ct"
+
     # Registration backend.
     # "simpleitk": iterative multi-attempt SimpleITK registration with retry on the liver gate.
     # "voxelmorph": single forward pass through a pre-trained VoxelMorph network.
@@ -120,7 +125,7 @@ class PipelineConfig:
 
 def load_test_dataframe(cfg: PipelineConfig) -> pd.DataFrame:
     data = pd.read_excel(cfg.excel_path)
-    data = data.sort_values("tumor_size").reset_index(drop=True)
+    data = data.sort_values("Mean1").reset_index(drop=True)
     return data.iloc[:cfg.test_size].copy()
 
 
@@ -839,6 +844,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data_root1", default=None)
     parser.add_argument("--data_root2", default=None)
     parser.add_argument("--input_format", choices=["auto", "nifti", "dicom"], default="auto")
+    parser.add_argument("--data_type", choices=["ct", "liver"], default="ct",
+                        help="Tumor inference input variant. Must match the data used at training time.")
     parser.add_argument("--liver_dice_threshold", type=float, default=0.95)
     parser.add_argument("--max_registration_attempts", type=int, default=5)
     parser.add_argument("--skip_nnunet_name_check", action="store_true",
@@ -851,6 +858,7 @@ def build_cfg_from_args(args: argparse.Namespace) -> PipelineConfig:
         results_root=args.results_root,
         excel_path=args.excel_path,
         input_format=args.input_format,
+        data_type=args.data_type,
         registration_backend=args.registration_backend,
         liver_dice_threshold=args.liver_dice_threshold,
         max_registration_attempts=args.max_registration_attempts,

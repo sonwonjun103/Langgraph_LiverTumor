@@ -7,15 +7,18 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
+from .inference_common import resolve_phase_paths
+
 
 def run_nnunetv2(attempt_dir: Path, output_dir: Path, cfg, case_id: str) -> Optional[str]:
     attempt_dir = Path(attempt_dir)
     output_dir = Path(output_dir)
     input_dir = output_dir / "input"
     input_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(attempt_dir / "A.nii.gz", input_dir / f"{case_id}_0000.nii.gz")
-    shutil.copy2(attempt_dir / "P.nii.gz", input_dir / f"{case_id}_0001.nii.gz")
-    shutil.copy2(attempt_dir / "D.nii.gz", input_dir / f"{case_id}_0002.nii.gz")
+    a_path, p_path, d_path = resolve_phase_paths(attempt_dir, cfg)
+    shutil.copy2(a_path, input_dir / f"{case_id}_0000.nii.gz")
+    shutil.copy2(p_path, input_dir / f"{case_id}_0001.nii.gz")
+    shutil.copy2(d_path, input_dir / f"{case_id}_0002.nii.gz")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     env = os.environ.copy()

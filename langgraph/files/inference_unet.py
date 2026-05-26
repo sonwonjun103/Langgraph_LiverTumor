@@ -10,7 +10,13 @@ import torch
 
 from train.models.UNet import build_unet
 
-from .inference_common import load_case, load_checkpoint, save_nifti, sliding_window_predict
+from .inference_common import (
+    load_case,
+    load_checkpoint,
+    resolve_phase_paths,
+    save_nifti,
+    sliding_window_predict,
+)
 
 
 @torch.no_grad()
@@ -30,12 +36,8 @@ def run_unet(attempt_dir: Path, output_dir: Path, cfg) -> Optional[str]:
     model.eval()
     load_checkpoint(model, checkpoint_path, device)
 
-    image, reference_image = load_case(
-        attempt_dir / "A.nii.gz",
-        attempt_dir / "P.nii.gz",
-        attempt_dir / "D.nii.gz",
-        cfg.window,
-    )
+    a_path, p_path, d_path = resolve_phase_paths(attempt_dir, cfg)
+    image, reference_image = load_case(a_path, p_path, d_path, cfg.window)
     image = image.to(device)
     logits = sliding_window_predict(
         model, image, cfg.roi_size, cfg.sw_batch_size, cfg.sw_overlap, cfg.sw_mode
