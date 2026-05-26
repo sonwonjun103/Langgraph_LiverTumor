@@ -63,8 +63,9 @@ class PipelineConfig:
     input_format: str = "auto"
 
     # Tumor inference input variant. Must match how the checkpoints were trained.
-    # "ct"    -> attempt_dir/{A,P,D}.nii.gz   (original registered CT)
-    # "liver" -> attempt_dir/liver_images/{A,P,D}_liver.nii.gz (CT * liver mask)
+    # "ct"    -> source_dir/{A,P,D}.nii.gz                  (original CT phases)
+    # "liver" -> source_dir/{AliverAv,PliverPv,DliverDv}.nii.gz
+    #           (the liver-cropped files prepared at training time)
     data_type: str = "ct"
 
     # Registration backend.
@@ -139,14 +140,20 @@ def get_case_from_row(row: pd.Series, cfg: PipelineConfig) -> Dict[str, Any]:
         source_dir = Path(cfg.data_root1) / subject / date
         case_id = f"{subject}_{date}"
 
+    data_type = getattr(cfg, "data_type", "ct")
+    if data_type == "liver":
+        a_name, p_name, d_name = "AliverAv.nii.gz", "PliverPv.nii.gz", "DliverDv.nii.gz"
+    else:
+        a_name, p_name, d_name = "A.nii.gz", "P.nii.gz", "D.nii.gz"
+
     return {
         "subject": subject,
         "date": date,
         "case_id": case_id,
         "source_dir": str(source_dir),
-        "A": str(source_dir / "A.nii.gz"),
-        "P": str(source_dir / "P.nii.gz"),
-        "D": str(source_dir / "D.nii.gz"),
+        "A": str(source_dir / a_name),
+        "P": str(source_dir / p_name),
+        "D": str(source_dir / d_name),
         "label": str(source_dir / "label.nii.gz"),
     }
 

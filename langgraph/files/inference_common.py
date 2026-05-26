@@ -12,36 +12,14 @@ from train.data.dataset import normalize_volume
 
 
 def resolve_phase_paths(attempt_dir, cfg) -> Tuple[Path, Path, Path]:
-    """Return (A, P, D) NIfTI paths based on ``cfg.data_type``.
+    """Return (A, P, D) NIfTI paths under ``attempt_dir``.
 
-    - ``data_type == "ct"`` (default): use the registered originals
-      ``attempt_dir/{A,P,D}.nii.gz``.
-    - ``data_type == "liver"``: use the liver-masked versions
-      ``attempt_dir/liver_images/{A,P,D}_liver.nii.gz`` produced by
-      ``LiverExtractor`` during the registration / liver-gate step.
-
-    Raises FileNotFoundError when the liver-masked files are requested but
-    missing (likely because the fallback liver extractor was used instead of
-    LiverExtractor).
+    The pipeline picks the right source file (CT vs liver-cropped) at the
+    case-loading step (see ``get_case_from_row``) and copies it into
+    ``input_dir/{A,P,D}.nii.gz``. After that everything downstream just reads
+    those fixed filenames, regardless of cfg.data_type.
     """
     attempt_dir = Path(attempt_dir)
-    data_type = getattr(cfg, "data_type", "ct")
-    if data_type == "liver":
-        liver_dir = attempt_dir / "liver_images"
-        paths = (
-            liver_dir / "A_liver.nii.gz",
-            liver_dir / "P_liver.nii.gz",
-            liver_dir / "D_liver.nii.gz",
-        )
-        missing = [str(p) for p in paths if not p.exists()]
-        if missing:
-            raise FileNotFoundError(
-                "cfg.data_type='liver' requires LiverExtractor outputs, but these "
-                f"files are missing: {missing}. Make sure liver extraction ran "
-                "(LiverExtractor) and produced the liver_images/ folder, or switch "
-                "cfg.data_type back to 'ct'."
-            )
-        return paths
     return (
         attempt_dir / "A.nii.gz",
         attempt_dir / "P.nii.gz",
