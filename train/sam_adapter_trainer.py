@@ -385,18 +385,19 @@ def _save_training_plot(history, output_dir):
     return path
 
 
-def _save_checkpoint(state, is_best, checkpoint_dir):
+def _save_checkpoint(state, is_best, checkpoint_dir, data_type=None):
     os.makedirs(checkpoint_dir, exist_ok=True)
-    last_path = os.path.join(checkpoint_dir, "last.pth.tar")
+    suffix = f"_{data_type}" if data_type else ""
+    last_path = os.path.join(checkpoint_dir, f"last{suffix}.pth.tar")
     torch.save(state, last_path)
 
     if is_best:
-        best_tar_path = os.path.join(checkpoint_dir, "best.pth.tar")
-        best_model_path = os.path.join(checkpoint_dir, "best_model.pt")
+        best_tar_path = os.path.join(checkpoint_dir, f"best{suffix}.pth.tar")
+        best_model_path = os.path.join(checkpoint_dir, f"best_model{suffix}.pt")
         shutil.copyfile(last_path, best_tar_path)
         shutil.copyfile(last_path, best_model_path)
 
-    return last_path 
+    return last_path
 
 
 def _make_loader(args, A, P, D, label, mode):
@@ -407,9 +408,9 @@ def _make_loader(args, A, P, D, label, mode):
         P,
         D,
         label,
-        window=getattr(args, "window", (-200, 300)),
+        window=getattr(args, "window", (0, 150)),
         mode=mode,
-        roi_size=getattr(args, "roi_size", (128, 128, 128)),
+        roi_size=getattr(args, "roi_size", (96, 128, 128)),
         samples_per_volume=getattr(args, "num_samples", 1) if mode == "train" else 1,
         pos_ratio=getattr(args, "pos_ratio", 0.5),
         augment=getattr(args, "augment", False) if mode == "train" else False,
@@ -506,7 +507,7 @@ def train_sam_adapter(args, train_paths, val_paths=None, logger=None):
         encoder_opt, start_factor=1.0, end_factor=0.01, total_iters=max_epochs
     )
     feature_scheduler = torch.optim.lr_scheduler.LinearLR(
-        feature_opt, start_factor=1.0, end_factor=0.01, total_iters=max_epochs
+        feature_opt, start_factor=1.0, end_factor=0.01, total_iters=max_epochs 
     )
     decoder_scheduler = torch.optim.lr_scheduler.LinearLR(
         decoder_opt, start_factor=1.0, end_factor=0.01, total_iters=max_epochs
@@ -663,6 +664,7 @@ def train_sam_adapter(args, train_paths, val_paths=None, logger=None):
                 },
                 is_best=is_best,
                 checkpoint_dir=output_dir,
+                data_type=getattr(args, "data_type", None),
             )
 
         history.append({

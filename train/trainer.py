@@ -47,7 +47,7 @@ class Trainer:
 
         return CustomDataset
 
-    def get_dataset(self):
+    def get_dataset(self): 
         dataset_class = self.get_dataset_class()
         self.dataset = dataset_class(self.A,
                                      self.P,
@@ -362,7 +362,9 @@ class Trainer:
         output_dir = getattr(self.args, "output_dir", "checkpoints")
         os.makedirs(output_dir, exist_ok=True)
 
-        path = os.path.join(output_dir, "best_model.pt")
+        data_type = getattr(self.args, "data_type", None)
+        suffix = f"_{data_type}" if data_type else ""
+        path = os.path.join(output_dir, f"best_model{suffix}.pt")
         checkpoint = {
             "epoch": epoch,
             "model_state_dict": self.model.state_dict(),
