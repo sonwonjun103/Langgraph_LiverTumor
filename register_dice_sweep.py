@@ -1,17 +1,20 @@
-"""Sweep registration attempts 1..5 across qualifying cases and write only an
-Excel table — no intermediate files, no langgraph imports.
+"""Sweep registration attempts across qualifying cases and write only an Excel
+table — no intermediate files, no langgraph imports.
 
 For every case in data1metrics.xlsx (content blank + tumor_size >= threshold)
-and data2metrics.xlsx (tumor_size >= threshold), this script:
+and data2metrics.xlsx (tumor_size >= threshold):
 
-  1. Reads the raw A/P/D NIfTI volumes from disk.
-  2. For attempt N = 1..5, runs registration with REGISTRATION_CONFIGS[N]
-     entirely in memory, dumps the registered phases into a per-case
-     tempdir, runs TotalSegmentator (extract_segmentation) on each phase,
-     and computes the mean of (AP, AD, PD) liver Dice.
-  3. If mean Dice >= --liver_dice_threshold, stops early and fills the
-     remaining attempts with 0.0. Otherwise moves to attempt N+1.
-  4. The tempdir is deleted after each case so nothing is left on disk.
+  - mean1 is the mean liver Dice computed directly from the pre-existing
+    liver-cropped files (AliverAv / PliverPv / DliverDv). These files are
+    treated as the attempt-1 result, so REGISTRATION_CONFIGS[1] is never
+    re-applied.
+  - If mean1 >= --liver_dice_threshold, stop early and fill mean2..mean5
+    with 0.0.
+  - Otherwise, run REGISTRATION_CONFIGS[N] for N = 2..5 in memory, dump the
+    registered phases into a per-case tempdir, run TotalSegmentator
+    (extract_segmentation) per phase, and write the new mean Dice as meanN.
+    Stop early on the first attempt that clears the threshold; the rest get 0.0.
+  - The tempdir is deleted after each case so nothing is left on disk.
 
 Output Excel columns:
   subject | date | tumor_size | mean1 | mean2 | mean3 | mean4 | mean5 | elapsed_min
@@ -50,6 +53,26 @@ def _format_id(value) -> str:
     return str(value)
 
 
+def initial_liver_dice(case_dir: Path) -> float:
+    """Mean liver Dice computed directly from the pre-existing liver-cropped files.
+
+    Returns NaN if any of AliverAv/PliverPv/DliverDv is missing.
+    """
+    paths = {
+        "A": case_dir / "AliverAv.nii.gz",
+        "P": case_dir / "PliverPv.nii.gz",
+        "D": case_dir / "DliverDv.nii.gz",
+    }
+    if not all(p.exists() for p in paths.values()):
+        return float("nan")
+
+    masks = {phase: sitk.GetArrayFromImage(sitk.ReadImage(str(p))) for phase, p in paths.items()}
+    ap = compute_dice(masks["A"], masks["P"])
+    ad = compute_dice(masks["A"], masks["D"])
+    pd_ = compute_dice(masks["P"], masks["D"])
+    return float((ap + ad + pd_) / 3.0)
+
+
 def mean_liver_dice(rA: sitk.Image, rP: sitk.Image, rD: sitk.Image) -> float:
     """Save registered phases to a tempdir, run TotalSegmentator per phase, and
     return the mean of (AP, AD, PD) liver Dice. Tempdir is removed on exit."""
@@ -76,18 +99,29 @@ def mean_liver_dice(rA: sitk.Image, rP: sitk.Image, rD: sitk.Image) -> float:
 def sweep_case(case_dir: Path, threshold: float, max_attempts: int = 5) -> Tuple[List[float], float]:
     """Return (means, elapsed_seconds) for one case.
 
-    means[i-1] = mean liver Dice after attempt i.
-    Once an attempt passes the threshold, the rest are filled with 0.0.
+    mean1 is read from the pre-existing liver-cropped files; mean2..N come from
+    REGISTRATION_CONFIGS[2..N]. REGISTRATION_CONFIGS[1] is never re-run because
+    the liver files are already the attempt-1 result. Once any mean clears the
+    threshold, the rest are filled with 0.0.
     """
+    start = time.time()
+
+    means: List[float] = [initial_liver_dice(case_dir)]
+    if not (means[0] == means[0]):  # NaN check
+        # Liver files missing — leave mean1 as NaN and skip the rest.
+        means.extend([0.0] * (max_attempts - 1))
+        return means, time.time() - start
+
+    if means[0] >= threshold:
+        means.extend([0.0] * (max_attempts - 1))
+        return means, time.time() - start
+
     rA_path = str(case_dir / "A.nii.gz")
     rP_path = str(case_dir / "P.nii.gz")
     rD_path = str(case_dir / "D.nii.gz")
 
-    means: List[float] = []
     passed = False
-    start = time.time()
-
-    for attempt in range(1, max_attempts + 1):
+    for attempt in range(2, max_attempts + 1):
         if passed:
             means.append(0.0)
             continue
