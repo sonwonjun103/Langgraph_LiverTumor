@@ -41,12 +41,16 @@ def format_path_part(value):
     return str(value)
 
 
-def split_dataframe(excel_path, test_size):
-    data = pd.read_excel(excel_path)
-    data = data.sort_values("tumor_size").reset_index(drop=True)
-    test_data = data.iloc[:test_size]
-    train_data = data.iloc[test_size:]
-    return train_data, test_data
+def split_dataframe(excel_path, test_size, sweep_xlsx="./register_dice_sweep.xlsx"):
+    # Driven by register_dice_sweep.xlsx (mean1 ascending) so the worst-aligned
+    # cases form the held-out test set; the rest of excel_path is train.
+    from dataset_split import split_train_test
+
+    return split_train_test(
+        metrics_xlsx=excel_path,
+        sweep_xlsx=sweep_xlsx,
+        test_size=test_size,
+    )
 
 
 def get_case_info(row, data_root1, data_root2):
@@ -239,6 +243,9 @@ def parse_args():
     parser.add_argument("--data_root2", default=DATA_PATH2)
     parser.add_argument("--output_root", default="./nnUNet/nnUNet_raw")
     parser.add_argument("--test_size", type=int, default=34)
+    parser.add_argument("--sweep_xlsx", default="./register_dice_sweep.xlsx",
+                        help="register_dice_sweep output. Top test_size cases (mean1 ascending) "
+                             "become the test set; everything else in --excel_path is train.")
     parser.add_argument(
         "--dataset",
         choices=["all", "Dataset001", "Dataset002"],
@@ -258,7 +265,7 @@ def parse_args():
 
 def main():
     args = parse_args()
-    train_data, test_data = split_dataframe(args.excel_path, args.test_size)
+    train_data, test_data = split_dataframe(args.excel_path, args.test_size, args.sweep_xlsx)
 
     if args.dataset == "all":
         selected_configs = DATASET_CONFIGS.values()

@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TypedDict
@@ -50,6 +51,7 @@ except Exception as exc:
 @dataclass
 class PipelineConfig:
     excel_path: str = "./alldata_metrics.xlsx"
+    sweep_xlsx: str = "./register_dice_sweep.xlsx"
     data_root1: str = DATA_PATH1
     data_root2: str = DATA_PATH2
     results_root: str = "./Results"
@@ -126,9 +128,15 @@ class PipelineConfig:
 
 
 def load_test_dataframe(cfg: PipelineConfig) -> pd.DataFrame:
-    data = pd.read_excel(cfg.excel_path)
-    data = data.sort_values("Mean1").reset_index(drop=True)
-    return data.iloc[:cfg.test_size].copy()
+    # Test set comes from the lowest-mean1 cases in register_dice_sweep.xlsx.
+    from dataset_split import split_train_test
+
+    _, test_df = split_train_test(
+        metrics_xlsx=cfg.excel_path,
+        sweep_xlsx=cfg.sweep_xlsx,
+        test_size=cfg.test_size,
+    )
+    return test_df
 
 
 def get_case_from_row(row: pd.Series, cfg: PipelineConfig) -> Dict[str, Any]:
@@ -420,6 +428,8 @@ class PipelineState(TypedDict, total=False):
     per_attempt_results: List[Dict[str, Any]]
     failed_reason: Optional[str]
     summary_path: Optional[str]
+    start_time: float
+    elapsed_seconds: float
 
 
 def prepare_case_node(state: PipelineState) -> PipelineState:
@@ -440,6 +450,7 @@ def prepare_case_node(state: PipelineState) -> PipelineState:
         "tumor_metrics": {},
         "per_attempt_results": [],
         "failed_reason": None,
+        "start_time": time.time(),
     })
     return state
 
@@ -825,6 +836,8 @@ def tumor_extraction_per_attempt_node(state: PipelineState) -> PipelineState:
 
 def finalize_node(state: PipelineState) -> PipelineState:
     case_result_dir = Path(state["case_result_dir"])
+    elapsed = time.time() - state.get("start_time", time.time())
+    state["elapsed_seconds"] = elapsed
     summary = {
         "case": state["case"],
         "input_format": state.get("input_format"),
@@ -837,6 +850,8 @@ def finalize_node(state: PipelineState) -> PipelineState:
         "attempts": state.get("attempts", []),
         "tumor_metrics": state.get("tumor_metrics", {}),
         "per_attempt_results": state.get("per_attempt_results", []),
+        "elapsed_seconds": round(elapsed, 2),
+        "elapsed_min": round(elapsed / 60.0, 3),
     }
     summary_path = case_result_dir / "summary.json"
     write_json(summary_path, summary)

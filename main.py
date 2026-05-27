@@ -105,6 +105,9 @@ def main():
         help="Use original CT phases or liver-cropped phases.",
     )
     parser.add_argument("--excel_path", default="./alldata_metrics.xlsx")
+    parser.add_argument("--sweep_xlsx", default="./register_dice_sweep.xlsx",
+                        help="register_dice_sweep output. Top test_size cases (mean1 ascending) "
+                             "become the test set; everything else in --excel_path is train.")
     parser.add_argument("--test_size", type=int, default=34)
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--batch_size", type=int, default=4)
@@ -197,14 +200,16 @@ def main():
         train_nnunetv2_all_folds(args=args, logger=logger)
         return
 
-    # 데이터 정보 읽기
-    alldata = pd.read_excel(args.excel_path)
-    alldata_sorted = alldata.sort_values("Mean1").reset_index(drop=True)
-    print(alldata_sorted)
+    # Train/test split is driven by register_dice_sweep.xlsx (mean1 ascending) so
+    # the worst-aligned cases form the held-out test set.
+    from dataset_split import split_train_test
 
-    # test, train data 분리
-    test_data = alldata_sorted.iloc[:args.test_size]
-    train_data = alldata_sorted.iloc[args.test_size:]
+    train_data, test_data = split_train_test(
+        metrics_xlsx=args.excel_path,
+        sweep_xlsx=args.sweep_xlsx,
+        test_size=args.test_size,
+    )
+    print(f"train={len(train_data)} cases, test={len(test_data)} cases (sweep={args.sweep_xlsx})")
 
     train_A, train_P, train_D, train_label = build_paths(
         train_data,
