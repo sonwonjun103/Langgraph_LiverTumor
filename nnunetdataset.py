@@ -41,16 +41,12 @@ def format_path_part(value):
     return str(value)
 
 
-def split_dataframe(excel_path, test_size, sweep_xlsx="./register_dice_sweep.xlsx"):
+def split_dataframe(sweep_xlsx, test_size):
     # Driven by register_dice_sweep.xlsx (mean1 ascending) so the worst-aligned
-    # cases form the held-out test set; the rest of excel_path is train.
+    # cases form the held-out test set; the rest are train.
     from dataset_split import split_train_test
 
-    return split_train_test(
-        metrics_xlsx=excel_path,
-        sweep_xlsx=sweep_xlsx,
-        test_size=test_size,
-    )
+    return split_train_test(sweep_xlsx=sweep_xlsx, test_size=test_size)
 
 
 def get_case_info(row, data_root1, data_root2):
@@ -238,14 +234,13 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Create nnUNet Dataset001/002 from the same split used by main.py."
     )
-    parser.add_argument("--excel_path", default="./alldata_metrics.xlsx")
+    parser.add_argument("--sweep_xlsx", default="./register_dice_sweep.xlsx",
+                        help="register_dice_sweep output. Top test_size cases (mean1 ascending) "
+                             "become the test set; the rest are train.")
     parser.add_argument("--data_root1", default=DATA_PATH1)
     parser.add_argument("--data_root2", default=DATA_PATH2)
     parser.add_argument("--output_root", default="./nnUNet/nnUNet_raw")
     parser.add_argument("--test_size", type=int, default=34)
-    parser.add_argument("--sweep_xlsx", default="./register_dice_sweep.xlsx",
-                        help="register_dice_sweep output. Top test_size cases (mean1 ascending) "
-                             "become the test set; everything else in --excel_path is train.")
     parser.add_argument(
         "--dataset",
         choices=["all", "Dataset001", "Dataset002"],
@@ -265,7 +260,7 @@ def parse_args():
 
 def main():
     args = parse_args()
-    train_data, test_data = split_dataframe(args.excel_path, args.test_size, args.sweep_xlsx)
+    train_data, test_data = split_dataframe(args.sweep_xlsx, args.test_size)
 
     if args.dataset == "all":
         selected_configs = DATASET_CONFIGS.values()

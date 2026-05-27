@@ -104,10 +104,9 @@ def main():
         default="liver",
         help="Use original CT phases or liver-cropped phases.",
     )
-    parser.add_argument("--excel_path", default="./alldata_metrics.xlsx")
     parser.add_argument("--sweep_xlsx", default="./register_dice_sweep.xlsx",
                         help="register_dice_sweep output. Top test_size cases (mean1 ascending) "
-                             "become the test set; everything else in --excel_path is train.")
+                             "become the test set; the rest are train.")
     parser.add_argument("--test_size", type=int, default=34)
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--batch_size", type=int, default=4)
@@ -205,7 +204,6 @@ def main():
     from dataset_split import split_train_test
 
     train_data, test_data = split_train_test(
-        metrics_xlsx=args.excel_path,
         sweep_xlsx=args.sweep_xlsx,
         test_size=args.test_size,
     )
@@ -235,7 +233,7 @@ def main():
     logger.info(f"Validation cases: {len(test_A)}")
     if not train_A:
         raise RuntimeError(
-            "No training cases were found. Check --data_root and the paths in alldata_metrics.xlsx."
+            "No training cases were found. Check --data_root and the paths in --sweep_xlsx."
         )
 
     if args.model == "sam_adapter":

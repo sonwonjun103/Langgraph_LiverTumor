@@ -50,7 +50,6 @@ except Exception as exc:
 
 @dataclass
 class PipelineConfig:
-    excel_path: str = "./alldata_metrics.xlsx"
     sweep_xlsx: str = "./register_dice_sweep.xlsx"
     data_root1: str = DATA_PATH1
     data_root2: str = DATA_PATH2
@@ -132,7 +131,6 @@ def load_test_dataframe(cfg: PipelineConfig) -> pd.DataFrame:
     from dataset_split import split_train_test
 
     _, test_df = split_train_test(
-        metrics_xlsx=cfg.excel_path,
         sweep_xlsx=cfg.sweep_xlsx,
         test_size=cfg.test_size,
     )
@@ -916,7 +914,9 @@ def parse_args() -> argparse.Namespace:
                         default="simpleitk")
     parser.add_argument("--voxelmorph_model_path", default=None)
     parser.add_argument("--results_root", default="./Results")
-    parser.add_argument("--excel_path", default="./alldata_metrics.xlsx")
+    parser.add_argument("--sweep_xlsx", default="./register_dice_sweep.xlsx",
+                        help="register_dice_sweep output. Top test_size cases (mean1 ascending) "
+                             "become the test set; the rest are train.")
     parser.add_argument("--data_root1", default=None)
     parser.add_argument("--data_root2", default=None)
     parser.add_argument("--input_format", choices=["auto", "nifti", "dicom"], default="auto")
@@ -932,7 +932,7 @@ def parse_args() -> argparse.Namespace:
 def build_cfg_from_args(args: argparse.Namespace) -> PipelineConfig:
     kwargs: Dict[str, Any] = dict(
         results_root=args.results_root,
-        excel_path=args.excel_path,
+        sweep_xlsx=args.sweep_xlsx,
         input_format=args.input_format,
         data_type=args.data_type,
         registration_backend=args.registration_backend,
