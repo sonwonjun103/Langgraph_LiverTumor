@@ -169,7 +169,10 @@ def load_cases(args) -> List[dict]:
         if all((folder / f"{p}.nii.gz").exists() for p in ("A", "P", "D")):
             cases.append({
                 "subject": subject,
-                "date": "",
+                # data2 has no date — use "0" to match the convention in
+                # alldata_metrics.xlsx / main.format_path_part so downstream
+                # joins still align on (subject, date).
+                "date": "0",
                 "tumor_size": float(row["tumor_size"]),
                 "case_dir": folder,
                 "case_id": subject,
