@@ -111,9 +111,11 @@ class PipelineConfig:
     nnunet_dataset: str = "001"
     nnunet_config: str = "3d_fullres"
     nnunet_save_probabilities: bool = True
-    nnunet_raw: Optional[str] = None
-    nnunet_preprocessed: Optional[str] = None
-    nnunet_results: Optional[str] = None
+    # Mirror main.py's defaults so pipeline.py finds the trained nnUNet weights
+    # without requiring nnUNet_raw / _preprocessed / _results to be exported.
+    nnunet_raw: Optional[str] = "/home/sonwonjun/research/Liver/finalcode/nnUNet/nnUNet_raw"
+    nnunet_preprocessed: Optional[str] = "/home/sonwonjun/research/Liver/finalcode/nnUNet/nnUNet_preprocessed"
+    nnunet_results: Optional[str] = "/home/sonwonjun/research/Liver/finalcode/nnUNet/nnUNet_results"
 
     def __post_init__(self):
         if self.checkpoints is None:
