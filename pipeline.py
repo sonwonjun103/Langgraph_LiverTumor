@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
+import shutil 
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -106,9 +106,11 @@ class PipelineConfig:
 
     checkpoints: Dict[str, str] = None
 
-    # nnUNetv2 settings
+    # nnUNetv2 settings. nnunet_dataset="auto" maps from data_type in __post_init__:
+    # data_type="ct" -> Dataset001, data_type="liver" -> Dataset002. Pass an
+    # explicit "001"/"002"/... to override.
     nnunet_input_dir: str = "./nnUNet/nnUNet_raw/Dataset001/imagesTs"
-    nnunet_dataset: str = "001"
+    nnunet_dataset: str = "auto"
     nnunet_config: str = "3d_fullres"
     nnunet_save_probabilities: bool = True
     # Mirror main.py's defaults so pipeline.py finds the trained nnUNet weights
@@ -125,6 +127,8 @@ class PipelineConfig:
                 "swinunetr": f"./checkpoints/swinunetr/{dt}/best_model.pt",
                 "sam3d_adapter": f"./checkpoints/sam_adapter/{dt}/best_model.pt",
             }
+        if self.nnunet_dataset == "auto":
+            self.nnunet_dataset = "002" if self.data_type == "liver" else "001"
 
 
 
@@ -924,6 +928,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input_format", choices=["auto", "nifti", "dicom"], default="auto")
     parser.add_argument("--data_type", choices=["ct", "liver"], default="ct",
                         help="Tumor inference input variant. Must match the data used at training time.")
+    parser.add_argument("--nnunet_dataset", default="auto",
+                        help='nnUNet dataset id ("001"/"002"/...). '
+                             '"auto" picks "001" for data_type=ct and "002" for data_type=liver.')
+    parser.add_argument("--nnunet_config", default="3d_fullres")
     parser.add_argument("--liver_dice_threshold", type=float, default=0.95)
     parser.add_argument("--max_registration_attempts", type=int, default=5)
     parser.add_argument("--skip_nnunet_name_check", action="store_true",
@@ -937,6 +945,8 @@ def build_cfg_from_args(args: argparse.Namespace) -> PipelineConfig:
         sweep_xlsx=args.sweep_xlsx,
         input_format=args.input_format,
         data_type=args.data_type,
+        nnunet_dataset=args.nnunet_dataset,
+        nnunet_config=args.nnunet_config,
         registration_backend=args.registration_backend,
         liver_dice_threshold=args.liver_dice_threshold,
         max_registration_attempts=args.max_registration_attempts,
