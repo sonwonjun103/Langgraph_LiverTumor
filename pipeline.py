@@ -439,7 +439,9 @@ class PipelineState(TypedDict, total=False):
 def prepare_case_node(state: PipelineState) -> PipelineState:
     cfg = state["cfg"]
     case = state["case"]
-    case_result_dir = Path(cfg.results_root) / case["case_id"]
+    # Layer Results by data_type so ct and liver inferences for the same case
+    # don't overwrite each other (matches ./checkpoints/<model>/<data_type>/).
+    case_result_dir = Path(cfg.results_root) / cfg.data_type / case["case_id"]
     case_result_dir.mkdir(parents=True, exist_ok=True)
     input_dir, input_format = prepare_phase_inputs(case, case_result_dir, cfg)
     write_json(case_result_dir / "case.json", {**case, "input_format": input_format})
