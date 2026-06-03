@@ -601,8 +601,6 @@ def registration_loop_node(state: PipelineState) -> PipelineState:
     return state
 
 
-def route_after_registration(state: PipelineState) -> str:
-    return "tumor" if state.get("registration_success") else "finalize"
 def registration_voxelmorph_node(state: PipelineState) -> PipelineState:
     """Register P/D phases to A using a pre-trained VoxelMorph network.
 
@@ -844,6 +842,18 @@ def finalize_node(state: PipelineState) -> PipelineState:
     case_result_dir = Path(state["case_result_dir"])
     elapsed = time.time() - state.get("start_time", time.time())
     state["elapsed_seconds"] = elapsed
+
+    # Stamp case.json with the registration outcome so it is visible without
+    # opening summary.json.
+    registration_status = "ok" if state.get("registration_success") else "all_registration_fail"
+    case_info = {
+        **state["case"],
+        "input_format": state.get("input_format"),
+        "registration_status": registration_status,
+        "final_liver_dice": state.get("final_liver_dice"),
+    }
+    write_json(case_result_dir / "case.json", case_info)
+
     summary = {
         "case": state["case"],
         "input_format": state.get("input_format"),
@@ -866,14 +876,15 @@ def finalize_node(state: PipelineState) -> PipelineState:
 
 
 def route_after_registration(state: PipelineState) -> str:
-    """Pick what to do after the initial registration node.
-
-    - registration_success=True  → "tumor" (single-best inference + per-attempt sweep)
-    - registration_success=False → "tumor_per_attempt" (skip single-best, still run the
-      cumulative 1..N sweep so we get tumor metrics for every attempt even when the
-      liver gate never passes)
+    """Always run tumor extraction, even when registration never cleared the
+    liver gate. ``final_attempt_dir`` is set either to the gate-passing
+    attempt (success) or to the last attempt that was tried (failure), so
+    ``tumor_extraction_node`` can still produce predictions and the
+    per-attempt sweep can score every attempt.
     """
-    return "tumor" if state.get("registration_success") else "tumor_per_attempt"
+    if state.get("final_attempt_dir"):
+        return "tumor"
+    return "finalize"
 
 
 def build_graph():
@@ -897,12 +908,12 @@ def build_graph():
     graph.add_conditional_edges(
         "registration",
         route_after_registration,
-        {"tumor": "tumor", "tumor_per_attempt": "tumor_per_attempt"},
+        {"tumor": "tumor", "finalize": "finalize"},
     )
     graph.add_conditional_edges(
         "registration_voxelmorph",
         route_after_registration,
-        {"tumor": "tumor", "tumor_per_attempt": "tumor_per_attempt"},
+        {"tumor": "tumor", "finalize": "finalize"},
     )
     graph.add_edge("tumor", "tumor_per_attempt")
     graph.add_edge("tumor_per_attempt", "finalize")
