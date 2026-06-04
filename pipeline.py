@@ -727,12 +727,15 @@ def tumor_extraction_per_attempt_node(state: PipelineState) -> PipelineState:
     """Run tumor extraction for every registration attempt (1..max_registration_attempts).
 
     Cumulative rule:
-      - For each attempt N, check the liver gate.
-      - As soon as one attempt's liver mean Dice >= cfg.liver_dice_threshold, every
-        subsequent attempt reuses that attempt's registered volumes (no re-registration)
-        and runs tumor extraction on the copied volumes.
-      - Attempts before the first pass each run their own registration hyperparameter,
-        then run tumor extraction regardless of whether they pass the gate.
+      - Attempt 1 (NIfTI input): copy source CT (A/P/D.nii.gz) and the
+        training-side liver-cropped files (AliverAv/PliverPv/DliverDv -> liver_images/)
+        directly into attempt_1/. NO new registration, NO TotalSegmentator.
+        Liver Dice is computed straight from those liver files. This matches
+        register_dice_sweep's mean1 definition.
+      - Attempt 2..5: if the previous gate already passed, copy the passed
+        attempt's volumes into attempt_N_reused/ (no re-registration). Otherwise
+        run REGISTRATION_CONFIGS[N] from the case input + TotalSegmentator gate.
+      - Tumor extraction always runs at every attempt.
 
     Results are written under {case_result_dir}/per_attempt/attempt_{N}/.
     """
@@ -758,6 +761,7 @@ def tumor_extraction_per_attempt_node(state: PipelineState) -> PipelineState:
 
     for attempt in range(1, cfg.max_registration_attempts + 1):
         if passed_source_dir is not None:
+            # Previous attempt cleared the gate; just clone it.
             attempt_dir = per_attempt_root / f"attempt_{attempt}_reused"
             attempt_dir.mkdir(parents=True, exist_ok=True)
             for phase in ("A", "P", "D"):
@@ -765,7 +769,28 @@ def tumor_extraction_per_attempt_node(state: PipelineState) -> PipelineState:
                     passed_source_dir / f"{phase}.nii.gz",
                     attempt_dir / f"{phase}.nii.gz",
                 )
+            src_liver = passed_source_dir / "liver_images"
+            if src_liver.exists():
+                dst_liver = attempt_dir / "liver_images"
+                dst_liver.mkdir(parents=True, exist_ok=True)
+                for f in src_liver.glob("*_liver.nii.gz"):
+                    shutil.copy2(f, dst_liver / f.name)
             config_name = "reused (previous attempt passed liver gate)"
+            registration_performed = False
+        elif attempt == 1 and input_format == "nifti":
+            # Attempt 1 for NIfTI input = the training-side liver-cropped files
+            # straight from the source directory. No registration, no TotalSegmentator.
+            attempt_dir = per_attempt_root / "attempt_1"
+            attempt_dir.mkdir(parents=True, exist_ok=True)
+            for phase in ("A", "P", "D"):
+                shutil.copy2(case[phase], attempt_dir / f"{phase}.nii.gz")
+            liver_dir = attempt_dir / "liver_images"
+            liver_dir.mkdir(parents=True, exist_ok=True)
+            for phase in ("A", "P", "D"):
+                liver_src = case.get(f"{phase}_liver")
+                if liver_src and Path(liver_src).exists():
+                    shutil.copy2(liver_src, liver_dir / f"{phase}_liver.nii.gz")
+            config_name = "source files (no register)"
             registration_performed = False
         else:
             attempt_dir = run_registration_attempt(
@@ -777,7 +802,11 @@ def tumor_extraction_per_attempt_node(state: PipelineState) -> PipelineState:
             config_name = REGISTRATION_CONFIGS[attempt].get("name", f"Attempt {attempt}")
             registration_performed = True
 
-        gate = evaluate_liver_gate(
+        # For attempt 1 (NIfTI source files), score the gate from the liver
+        # files directly so TotalSegmentator is skipped — matching
+        # register_dice_sweep.mean1.
+        gate_fn = evaluate_initial_liver_gate if (not registration_performed and attempt == 1) else evaluate_liver_gate
+        gate = gate_fn(
             volume_dir=attempt_dir,
             cfg=cfg,
             stage=f"per_attempt_{attempt}",
