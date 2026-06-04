@@ -524,152 +524,6 @@ def run_registration_attempt(
     return Path(attempt_dir)
 
 
-def registration_loop_node(state: PipelineState) -> PipelineState:
-    cfg = state["cfg"]
-    input_dir = Path(state["input_dir"])
-    case_result_dir = Path(state["case_result_dir"])
-    input_format = state.get("input_format", "nifti")
-
-    attempts = []
-
-    if input_format == "nifti":
-        # NIfTI volumes are already available. The initial gate uses the
-        # pre-existing liver-cropped files (no TotalSegmentator).
-        liver_dir = input_dir / "liver_images"
-        liver_files_present = all(
-            (liver_dir / f"{p}_liver.nii.gz").exists() for p in ("A", "P", "D")
-        )
-
-        initial_record = evaluate_initial_liver_gate(
-            volume_dir=input_dir,
-            cfg=cfg,
-            stage="input_liver_check",
-            attempt=0,
-            config_name="No registration",
-        )
-        attempts.append(initial_record)
-
-        if initial_record["liver_dice"]["MeanDice"] >= cfg.liver_dice_threshold:
-            state["registration_success"] = True
-            state["final_attempt_dir"] = str(input_dir)
-            state["final_liver_dice"] = initial_record["liver_dice"]["MeanDice"]
-            state["attempts"] = attempts
-            return state
-
-        # liver files present  -> can skip attempt 1 (the no-op identity registration)
-        # liver files missing  -> start from attempt 1 because we have nothing aligned yet
-        start_attempt = 2 if liver_files_present else 1
-        registration_input_folder = input_dir
-    elif input_format == "dicom":
-        # DICOM inputs are converted to NIfTI first, then resampled and registered from attempt 1.
-        Resampler(input_folder=str(input_dir), output_path=str(case_result_dir)).run()
-        start_attempt = 1
-        registration_input_folder = case_result_dir
-    else:
-        raise ValueError(f"Unsupported input_format: {input_format}")
-
-    for attempt in range(start_attempt, cfg.max_registration_attempts + 1):
-        reg_param = REGISTRATION_CONFIGS[attempt]
-        a_start = time.time()
-        reg_t0 = time.time()
-        attempt_dir = run_registration_attempt(
-            cfg=cfg,
-            case_result_dir=case_result_dir,
-            input_folder=registration_input_folder,
-            attempt=attempt,
-        )
-        reg_elapsed = time.time() - reg_t0
-
-        gate_t0 = time.time()
-        attempt_record = evaluate_liver_gate(
-            volume_dir=attempt_dir,
-            cfg=cfg,
-            stage=f"registration_attempt_{attempt}",
-            attempt=attempt,
-            config_name=reg_param.get("name", f"Attempt {attempt}"),
-        )
-        gate_elapsed = time.time() - gate_t0
-        attempt_record["registration_seconds"] = round(reg_elapsed, 2)
-        attempt_record["liver_gate_seconds"] = round(gate_elapsed, 2)
-        attempt_record["elapsed_seconds"] = round(time.time() - a_start, 2)
-        attempts.append(attempt_record)
-
-        if attempt_record["liver_dice"]["MeanDice"] >= cfg.liver_dice_threshold:
-            state["registration_success"] = True
-            state["final_attempt_dir"] = str(attempt_dir)
-            state["final_liver_dice"] = attempt_record["liver_dice"]["MeanDice"]
-            break
-
-    state["attempts"] = attempts
-    if not state.get("registration_success"):
-        state["failed_reason"] = "registration_liver_dice_below_threshold"
-        if attempts:
-            state["final_attempt_dir"] = attempts[-1]["attempt_dir"]
-            state["final_liver_dice"] = attempts[-1]["liver_dice"]["MeanDice"]
-    return state
-
-
-def registration_voxelmorph_node(state: PipelineState) -> PipelineState:
-    """Register P/D phases to A using a pre-trained VoxelMorph network.
-
-    Single forward pass — no retry loop. The result populates the same state
-    keys as registration_loop_node so the rest of the graph (tumor extraction,
-    finalize) does not need to know which backend ran.
-    """
-    cfg = state["cfg"]
-    case_result_dir = Path(state["case_result_dir"])
-    input_dir = Path(state["input_dir"])
-
-    model_path = getattr(cfg, "voxelmorph_model_path", None)
-    if not model_path or not Path(model_path).exists():
-        state["registration_success"] = False
-        state["failed_reason"] = f"voxelmorph_model_not_found: {model_path}"
-        state["attempts"] = []
-        return state
-
-    from langgraph.files.registration_voxelmorph import VoxelMorphRegistration
-
-    if state.get("input_format") == "dicom":
-        Resampler(input_folder=str(input_dir), output_path=str(case_result_dir)).run()
-        register_input = case_result_dir
-    else:
-        register_input = input_dir
-
-    attempt_dir = VoxelMorphRegistration(
-        input_folder=str(register_input),
-        output_path=str(case_result_dir),
-        model_path=model_path,
-        device=cfg.device,
-        window=tuple(cfg.window),
-        attempt=0,
-    ).run()
-
-    record = evaluate_liver_gate(
-        volume_dir=Path(attempt_dir),
-        cfg=cfg,
-        stage="voxelmorph",
-        attempt=0,
-        config_name="VoxelMorph",
-    )
-
-    state["attempts"] = [record]
-    passes = record["liver_dice"]["MeanDice"] >= cfg.liver_dice_threshold
-    state["registration_success"] = bool(passes)
-    state["final_attempt_dir"] = attempt_dir
-    state["final_liver_dice"] = record["liver_dice"]["MeanDice"]
-    if not passes:
-        state["failed_reason"] = "voxelmorph_liver_dice_below_threshold"
-    return state
-
-
-def route_registration_method(state: PipelineState) -> str:
-    """Pick the registration backend based on cfg.registration_backend."""
-    backend = getattr(state["cfg"], "registration_backend", "simpleitk")
-    if backend == "voxelmorph":
-        return "registration_voxelmorph"
-    return "registration"
-
-
 SUPPORTED_TUMOR_MODELS = ("unet", "swinunetr", "sam3d_adapter", "nnunetv2")
 
 
@@ -686,49 +540,6 @@ def _normalize_model_selection(value) -> tuple:
     return tuple(value)
 
 
-def tumor_extraction_node(state: PipelineState) -> PipelineState:
-    cfg = state["cfg"]
-    case = state["case"]
-    attempt_dir = Path(state["final_attempt_dir"])
-    tumor_root = Path(state["case_result_dir"]) / "tumor"
-    gt_path = resample_label_to_reference(
-        case["label"],
-        attempt_dir / "P.nii.gz",
-        Path(state["case_result_dir"]) / "gt_label_resampled.nii.gz",
-    )
-
-    available_runners = {
-        "unet": lambda out: run_unet(attempt_dir, out, cfg),
-        "swinunetr": lambda out: run_swinunetr(attempt_dir, out, cfg),
-        "sam3d_adapter": lambda out: run_sam_adapter(attempt_dir, out, cfg, gt_path=gt_path),
-        "nnunetv2": lambda out: run_nnunetv2(attempt_dir, out, cfg, case["case_id"]),
-    }
-
-    selected = _normalize_model_selection(cfg.models)
-    unknown = [name for name in selected if name not in available_runners]
-    if unknown:
-        raise ValueError(
-            f"Unknown tumor models in cfg.models: {unknown}. "
-            f"Choose from {SUPPORTED_TUMOR_MODELS}."
-        )
-
-    tumor_metrics = {}
-    for model_name in selected:
-        runner = available_runners[model_name]
-        model_dir = tumor_root / model_name
-        pred_path = runner(model_dir)
-        if pred_path is None:
-            tumor_metrics[model_name] = {"status": "failed_or_skipped"}
-            write_json(model_dir / "metrics.json", tumor_metrics[model_name])
-            continue
-
-        metrics = compute_prediction_metrics(pred_path, gt_path)
-        metrics["status"] = "ok"
-        tumor_metrics[model_name] = metrics
-        write_json(model_dir / "metrics.json", metrics)
-
-    state["tumor_metrics"] = tumor_metrics
-    return state
 
 
 def tumor_extraction_per_attempt_node(state: PipelineState) -> PipelineState:
@@ -881,6 +692,33 @@ def tumor_extraction_per_attempt_node(state: PipelineState) -> PipelineState:
             passed_source_dir = attempt_dir
 
     state["per_attempt_results"] = per_attempt_results
+    state["attempts"] = per_attempt_results
+
+    # Pick the first attempt that cleared the liver gate as "final" so
+    # finalize_node / case.json / summary.json have something to record.
+    threshold = cfg.liver_dice_threshold
+    first_passed = next(
+        (e for e in per_attempt_results
+         if e.get("liver_dice", {}).get("MeanDice", 0.0) >= threshold),
+        None,
+    )
+    if first_passed is not None:
+        state["registration_success"] = True
+        state["final_attempt_dir"] = first_passed["attempt_dir"]
+        state["final_liver_dice"] = first_passed["liver_dice"]["MeanDice"]
+        state["tumor_metrics"] = first_passed.get("tumor_metrics", {})
+    elif per_attempt_results:
+        state["registration_success"] = False
+        state["failed_reason"] = "registration_liver_dice_below_threshold"
+        last = per_attempt_results[-1]
+        state["final_attempt_dir"] = last["attempt_dir"]
+        state["final_liver_dice"] = last["liver_dice"]["MeanDice"]
+        state["tumor_metrics"] = last.get("tumor_metrics", {})
+    else:
+        state["registration_success"] = False
+        state["failed_reason"] = "no_attempts_completed"
+        state["tumor_metrics"] = {}
+
     write_json(case_result_dir / "per_attempt_results.json", {"results": per_attempt_results})
     return state
 
@@ -922,47 +760,14 @@ def finalize_node(state: PipelineState) -> PipelineState:
     return state
 
 
-def route_after_registration(state: PipelineState) -> str:
-    """Always run tumor extraction, even when registration never cleared the
-    liver gate. ``final_attempt_dir`` is set either to the gate-passing
-    attempt (success) or to the last attempt that was tried (failure), so
-    ``tumor_extraction_node`` can still produce predictions and the
-    per-attempt sweep can score every attempt.
-    """
-    if state.get("final_attempt_dir"):
-        return "tumor"
-    return "finalize"
-
-
 def build_graph():
     graph = StateGraph(PipelineState)
     graph.add_node("prepare", prepare_case_node)
-    graph.add_node("registration", registration_loop_node)
-    graph.add_node("registration_voxelmorph", registration_voxelmorph_node)
-    graph.add_node("tumor", tumor_extraction_node)
     graph.add_node("tumor_per_attempt", tumor_extraction_per_attempt_node)
     graph.add_node("finalize", finalize_node)
 
     graph.add_edge(START, "prepare")
-    graph.add_conditional_edges(
-        "prepare",
-        route_registration_method,
-        {
-            "registration": "registration",
-            "registration_voxelmorph": "registration_voxelmorph",
-        },
-    )
-    graph.add_conditional_edges(
-        "registration",
-        route_after_registration,
-        {"tumor": "tumor", "finalize": "finalize"},
-    )
-    graph.add_conditional_edges(
-        "registration_voxelmorph",
-        route_after_registration,
-        {"tumor": "tumor", "finalize": "finalize"},
-    )
-    graph.add_edge("tumor", "tumor_per_attempt")
+    graph.add_edge("prepare", "tumor_per_attempt")
     graph.add_edge("tumor_per_attempt", "finalize")
     graph.add_edge("finalize", END)
     return graph.compile()
