@@ -802,10 +802,10 @@ def tumor_extraction_per_attempt_node(state: PipelineState) -> PipelineState:
             config_name = REGISTRATION_CONFIGS[attempt].get("name", f"Attempt {attempt}")
             registration_performed = True
 
-        # For attempt 1 (NIfTI source files), score the gate from the liver
-        # files directly so TotalSegmentator is skipped — matching
-        # register_dice_sweep.mean1.
-        gate_fn = evaluate_initial_liver_gate if (not registration_performed and attempt == 1) else evaluate_liver_gate
+        # When no registration ran this attempt (attempt_1 source files OR a
+        # reused/copied attempt after a prior pass), liver_images/ is already
+        # on disk — score the gate directly without re-running TotalSegmentator.
+        gate_fn = evaluate_liver_gate if registration_performed else evaluate_initial_liver_gate
         gate = gate_fn(
             volume_dir=attempt_dir,
             cfg=cfg,
