@@ -570,13 +570,17 @@ def registration_loop_node(state: PipelineState) -> PipelineState:
 
     for attempt in range(start_attempt, cfg.max_registration_attempts + 1):
         reg_param = REGISTRATION_CONFIGS[attempt]
+        a_start = time.time()
+        reg_t0 = time.time()
         attempt_dir = run_registration_attempt(
             cfg=cfg,
             case_result_dir=case_result_dir,
             input_folder=registration_input_folder,
             attempt=attempt,
         )
+        reg_elapsed = time.time() - reg_t0
 
+        gate_t0 = time.time()
         attempt_record = evaluate_liver_gate(
             volume_dir=attempt_dir,
             cfg=cfg,
@@ -584,6 +588,10 @@ def registration_loop_node(state: PipelineState) -> PipelineState:
             attempt=attempt,
             config_name=reg_param.get("name", f"Attempt {attempt}"),
         )
+        gate_elapsed = time.time() - gate_t0
+        attempt_record["registration_seconds"] = round(reg_elapsed, 2)
+        attempt_record["liver_gate_seconds"] = round(gate_elapsed, 2)
+        attempt_record["elapsed_seconds"] = round(time.time() - a_start, 2)
         attempts.append(attempt_record)
 
         if attempt_record["liver_dice"]["MeanDice"] >= cfg.liver_dice_threshold:
@@ -760,6 +768,7 @@ def tumor_extraction_per_attempt_node(state: PipelineState) -> PipelineState:
     passed_source_dir: Optional[Path] = None
 
     for attempt in range(1, cfg.max_registration_attempts + 1):
+        a_start = time.time()
         if passed_source_dir is not None:
             # Previous attempt cleared the gate; just clone it.
             attempt_dir = per_attempt_root / f"attempt_{attempt}_reused"
@@ -837,16 +846,23 @@ def tumor_extraction_per_attempt_node(state: PipelineState) -> PipelineState:
         tumor_root = attempt_dir / "tumor"
         for model_name in selected:
             model_dir = tumor_root / model_name
+            m_t0 = time.time()
             pred_path = runners[model_name](model_dir)
+            m_elapsed = round(time.time() - m_t0, 2)
             if pred_path is None:
-                tumor_metrics[model_name] = {"status": "failed_or_skipped"}
+                tumor_metrics[model_name] = {
+                    "status": "failed_or_skipped",
+                    "elapsed_seconds": m_elapsed,
+                }
                 write_json(model_dir / "metrics.json", tumor_metrics[model_name])
                 continue
             metrics = compute_prediction_metrics(pred_path, gt_path)
             metrics["status"] = "ok"
+            metrics["elapsed_seconds"] = m_elapsed
             tumor_metrics[model_name] = metrics
             write_json(model_dir / "metrics.json", metrics)
 
+        attempt_elapsed = round(time.time() - a_start, 2)
         per_attempt_results.append({
             "attempt": attempt,
             "attempt_dir": str(attempt_dir),
@@ -854,6 +870,8 @@ def tumor_extraction_per_attempt_node(state: PipelineState) -> PipelineState:
             "liver_dice": gate["liver_dice"],
             "tumor_metrics": tumor_metrics,
             "config": config_name,
+            "elapsed_seconds": attempt_elapsed,
+            "elapsed_min": round(attempt_elapsed / 60.0, 3),
         })
 
         if (
