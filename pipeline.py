@@ -75,6 +75,12 @@ class PipelineConfig:
     registration_backend: str = "simpleitk"
     voxelmorph_model_path: str = "./checkpoints/voxelmorph/best_model.pt"
 
+    # If True, reuse existing attempt folders on disk: when per_attempt/attempt_N
+    # (or attempt_N_reused) already has A/P/D.nii.gz, skip the registration /
+    # copy step and re-run only tumor extraction. Useful when new model
+    # checkpoints arrive and you just want to refresh their predictions.
+    reuse_registration: bool = True
+
     # Tumor inference selection.
     # Pick a subset like ("unet",) for a single model, or keep all four to run them together.
     # Override at runtime with --models on the CLI.
@@ -578,9 +584,26 @@ def tumor_extraction_per_attempt_node(state: PipelineState) -> PipelineState:
     per_attempt_results: List[Dict[str, Any]] = []
     passed_source_dir: Optional[Path] = None
 
+    reuse = bool(getattr(cfg, "reuse_registration", True))
+
+    def _cached_attempt_dir(att: int) -> Optional[Path]:
+        """Return an existing attempt_<N>[_reused] folder if A/P/D already exist there."""
+        for name in (f"attempt_{att}", f"attempt_{att}_reused"):
+            d = per_attempt_root / name
+            if d.exists() and all((d / f"{p}.nii.gz").exists() for p in ("A", "P", "D")):
+                return d
+        return None
+
     for attempt in range(1, cfg.max_registration_attempts + 1):
         a_start = time.time()
-        if passed_source_dir is not None:
+        cached = _cached_attempt_dir(attempt) if reuse else None
+        if cached is not None:
+            # Registered volumes already on disk — skip register / copy
+            # entirely and just re-run liver gate + tumor extraction.
+            attempt_dir = cached
+            config_name = f"cached ({attempt_dir.name})"
+            registration_performed = False
+        elif passed_source_dir is not None:
             # Previous attempt cleared the gate; just clone it.
             attempt_dir = per_attempt_root / f"attempt_{attempt}_reused"
             attempt_dir.mkdir(parents=True, exist_ok=True)
@@ -793,6 +816,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input_format", choices=["auto", "nifti", "dicom"], default="auto")
     parser.add_argument("--data_type", choices=["ct", "liver"], default="ct",
                         help="Tumor inference input variant. Must match the data used at training time.")
+    parser.add_argument("--reuse-registration", dest="reuse_registration", action="store_true",
+                        default=True,
+                        help="(default) Reuse existing per_attempt/attempt_N/A/P/D.nii.gz when "
+                             "present; only re-run tumor extraction.")
+    parser.add_argument("--no-reuse-registration", dest="reuse_registration", action="store_false",
+                        help="Force every attempt to re-run registration even if cached.")
     parser.add_argument("--nnunet_dataset", default="auto",
                         help='nnUNet dataset id ("001"/"002"/...). '
                              '"auto" picks "001" for data_type=ct and "002" for data_type=liver.')
@@ -812,6 +841,7 @@ def build_cfg_from_args(args: argparse.Namespace) -> PipelineConfig:
         data_type=args.data_type,
         nnunet_dataset=args.nnunet_dataset,
         nnunet_config=args.nnunet_config,
+        reuse_registration=args.reuse_registration,
         registration_backend=args.registration_backend,
         liver_dice_threshold=args.liver_dice_threshold,
         max_registration_attempts=args.max_registration_attempts,
