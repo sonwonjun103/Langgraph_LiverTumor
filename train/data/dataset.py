@@ -32,7 +32,8 @@ class CustomDataset(Dataset):
                  mode="val",
                  roi_size=(96, 128, 128),
                  samples_per_volume=1,
-                 pos_ratio=0.5,
+                 pos_ratio=0.8,
+                 random_crop=True,
                  augment=False):
         self.A = A
         self.P = P
@@ -44,6 +45,7 @@ class CustomDataset(Dataset):
         self.roi_size = tuple(roi_size)
         self.samples_per_volume = samples_per_volume if mode == "train" else 1
         self.pos_ratio = pos_ratio
+        self.random_crop = random_crop
         self.augment = augment
         self.transforms = self.build_transforms()
 
@@ -52,9 +54,15 @@ class CustomDataset(Dataset):
             Compose,
             EnsureTyped,
             Lambdad,
+            RandAdjustContrastd,
+            RandAffined,
             RandCropByPosNegLabeld,
             RandFlipd,
+            RandGaussianNoised,
+            RandGaussianSmoothd,
             RandRotate90d,
+            RandScaleIntensityd,
+            RandShiftIntensityd,
             ScaleIntensityRanged,
             SpatialPadd,
         )
@@ -73,30 +81,52 @@ class CustomDataset(Dataset):
         ]
 
         if self.mode == "train":
-            transforms.extend([
-                SpatialPadd(
-                    keys=["image", "label"],
-                    spatial_size=self.roi_size,
-                    mode="constant",
-                ),
-                RandCropByPosNegLabeld(
-                    keys=["image", "label"],
-                    label_key="label",
-                    spatial_size=self.roi_size,
-                    pos=self.pos_ratio,
-                    neg=1.0 - self.pos_ratio,
-                    num_samples=1,
-                    image_key="image",
-                    image_threshold=0,
-                ),
-            ])
+            if self.random_crop:
+                transforms.extend([
+                    SpatialPadd(
+                        keys=["image", "label"],
+                        spatial_size=self.roi_size,
+                        mode="constant",
+                    ),
+                    RandCropByPosNegLabeld(
+                        keys=["image", "label"],
+                        label_key="label",
+                        spatial_size=self.roi_size,
+                        pos=self.pos_ratio,
+                        neg=1.0 - self.pos_ratio,
+                        num_samples=1,
+                        image_key="image",
+                        image_threshold=0,
+                    ),
+                ])
 
             if self.augment:
                 transforms.extend([
+                    # Geometric
                     RandFlipd(keys=["image", "label"], spatial_axis=0, prob=0.5),
                     RandFlipd(keys=["image", "label"], spatial_axis=1, prob=0.5),
                     RandFlipd(keys=["image", "label"], spatial_axis=2, prob=0.5),
                     RandRotate90d(keys=["image", "label"], spatial_axes=(1, 2), prob=0.5, max_k=3),
+                    RandAffined(
+                        keys=["image", "label"],
+                        prob=0.2,
+                        rotate_range=(0.3, 0.3, 0.3),
+                        scale_range=(0.2, 0.2, 0.2),
+                        mode=("bilinear", "nearest"),
+                        padding_mode="border",
+                    ),
+                    # Intensity
+                    RandGaussianNoised(keys="image", prob=0.15, std=0.05),
+                    RandGaussianSmoothd(
+                        keys="image",
+                        prob=0.15,
+                        sigma_x=(0.5, 1.0),
+                        sigma_y=(0.5, 1.0),
+                        sigma_z=(0.5, 1.0),
+                    ),
+                    RandScaleIntensityd(keys="image", factors=0.1, prob=0.15),
+                    RandShiftIntensityd(keys="image", offsets=0.05, prob=0.15),
+                    RandAdjustContrastd(keys="image", prob=0.15, gamma=(0.7, 1.5)),
                 ])
 
         transforms.append(EnsureTyped(keys=["image", "label"], dtype=torch.float32))
@@ -110,7 +140,7 @@ class CustomDataset(Dataset):
 
         arterial = read_sitk_volume(self.A[index]).astype(np.float32)
         portal = read_sitk_volume(self.P[index]).astype(np.float32)
-        delayed = read_sitk_volume(self.D[index]).astype(np.float32)
+        delayed = read_sitk_volume(self.D[index]).astype(np.float32) 
         label = read_sitk_volume(self.label[index]).astype(np.float32)
 
         data = {

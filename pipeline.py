@@ -13,8 +13,10 @@ Examples
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
-import shutil 
+import shutil
+import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -54,6 +56,9 @@ class PipelineConfig:
     data_root1: str = DATA_PATH1
     data_root2: str = DATA_PATH2
     results_root: str = "./Results"
+    # Per-run timestamp folder; auto-filled in __post_init__ if blank.
+    # Final layout: results_root/<data_type>/<timestamp>/<case_id>/
+    timestamp: str = ""
     test_size: int = 34
     liver_dice_threshold: float = 0.95
     max_registration_attempts: int = 5
@@ -135,6 +140,8 @@ class PipelineConfig:
             }
         if self.nnunet_dataset == "auto":
             self.nnunet_dataset = "002" if self.data_type == "liver" else "001"
+        if not self.timestamp:
+            self.timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
 
@@ -445,9 +452,10 @@ class PipelineState(TypedDict, total=False):
 def prepare_case_node(state: PipelineState) -> PipelineState:
     cfg = state["cfg"]
     case = state["case"]
-    # Layer Results by data_type so ct and liver inferences for the same case
-    # don't overwrite each other (matches ./checkpoints/<model>/<data_type>/).
-    case_result_dir = Path(cfg.results_root) / cfg.data_type / case["case_id"]
+    # Layer Results by data_type AND a per-run timestamp so each pipeline
+    # invocation is isolated. Final layout:
+    #   ./Results/<data_type>/<timestamp>/<case_id>/
+    case_result_dir = Path(cfg.results_root) / cfg.data_type / cfg.timestamp / case["case_id"]
     case_result_dir.mkdir(parents=True, exist_ok=True)
     input_dir, input_format = prepare_phase_inputs(case, case_result_dir, cfg)
     write_json(case_result_dir / "case.json", {**case, "input_format": input_format})
@@ -888,12 +896,34 @@ def run_batch(cfg: PipelineConfig, pipeline_graph) -> List[str]:
 def main() -> None:
     args = parse_args()
     cfg = build_cfg_from_args(args)
-    Path(cfg.results_root).mkdir(parents=True, exist_ok=True)
+    run_dir = Path(cfg.results_root) / cfg.data_type / cfg.timestamp
+    run_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Run dir: {run_dir}")
+
+    # Drop a run_metadata.json beside the case folders so this run's settings
+    # are recoverable from disk alone (mirrors the train-side metadata).
+    try:
+        git_commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], text=True
+        ).strip()
+    except Exception:
+        git_commit = None
+    cfg_dict = {k: getattr(cfg, k) for k in cfg.__dataclass_fields__}
+    cfg_dict["models"] = list(cfg.models) if cfg.models else None
+    cfg_dict["window"] = list(cfg.window)
+    cfg_dict["roi_size"] = list(cfg.roi_size)
+    write_json(run_dir / "run_metadata.json", {
+        "timestamp": cfg.timestamp,
+        "mode": args.mode,
+        "case_id": args.case_id,
+        "git_commit": git_commit,
+        "cfg": cfg_dict,
+    })
 
     if not args.skip_nnunet_name_check:
         try:
             report = validate_nnunet_test_case_names(cfg)
-            write_json(Path(cfg.results_root) / "nnunet_test_case_name_report.json", report)
+            write_json(run_dir / "nnunet_test_case_name_report.json", report)
             for dataset_name, ds in report["datasets"].items():
                 print(
                     dataset_name,

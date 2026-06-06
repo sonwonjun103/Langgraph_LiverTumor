@@ -1,4 +1,7 @@
+import datetime
+import json
 import os
+import subprocess
 import argparse
 import pandas as pd
 
@@ -133,8 +136,14 @@ def main():
         help="Patch/sliding-window size in SimpleITK array order: D H W.",
     )
     parser.add_argument("--num_samples", type=int, default=4)
-    parser.add_argument("--pos_ratio", type=float, default=0.5)
-    parser.add_argument("--augment", type=bool, default=True)
+    parser.add_argument("--pos_ratio", type=float, default=0.8,
+                        help="Pos:neg ratio for RandCropByPosNegLabeld (only used when --random_crop).")
+    parser.add_argument("--random_crop", action=argparse.BooleanOptionalAction, default=True,
+                        help="Use RandCropByPosNegLabeld for training patches. "
+                             "Default True. Use --no-random_crop to disable (full-volume training).")
+    parser.add_argument("--augment", action=argparse.BooleanOptionalAction, default=True,
+                        help="Apply geometric + intensity augmentation (flip/rot, affine, noise, "
+                             "blur, intensity scale/shift, gamma).")
     parser.add_argument("--use_sliding_window", action="store_true", default=True)
     parser.add_argument("--no_sliding_window", dest="use_sliding_window", action="store_false")
     parser.add_argument("--sw_batch_size", type=int, default=4)
@@ -185,13 +194,17 @@ def main():
 
     parser.add_argument("--output_dir", default="./checkpoints")
     args = parser.parse_args()
-    # Layer the output directory by model and then by data_type so checkpoints,
-    # training_curves.png, training_history.json, and the log file all live
-    # under the same data_type folder. nnUNetv2 manages its own data layout but
-    # we still nest it the same way for consistency.
-    args.output_dir = os.path.join(args.output_dir, args.model, args.data_type)
+    # Layer the output directory by model, data_type, and a per-run timestamp
+    # so every training run is isolated: checkpoints, training_curves.png,
+    # training_history.json, the log file, and run_metadata.json all live
+    # under the same folder.
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    args.timestamp = timestamp
+    args.output_dir = os.path.join(args.output_dir, args.model, args.data_type, timestamp)
+    os.makedirs(args.output_dir, exist_ok=True)
     logger = setup_logger(args.output_dir, name=f"train_{args.model}")
     logger.info(f"Arguments: {vars(args)}")
+    logger.info(f"Output dir: {args.output_dir}")
 
     if args.model == "nnunetv2":
         from train.nnunetv2_runner import train_nnunetv2_all_folds
@@ -235,6 +248,43 @@ def main():
         raise RuntimeError(
             "No training cases were found. Check --data_root and the paths in --sweep_xlsx."
         )
+
+    # Save a single, self-describing run_metadata.json under the timestamped
+    # output_dir so any future ./Results/<timestamp>/ folder can be traced
+    # back to the exact training config.
+    try:
+        git_commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], text=True
+        ).strip()
+    except Exception:
+        git_commit = None
+
+    run_metadata = {
+        "timestamp": timestamp,
+        "model": args.model,
+        "data_type": args.data_type,
+        "git_commit": git_commit,
+        "args": vars(args),
+        "data": {
+            "train_cases": len(train_A),
+            "test_cases": len(test_A),
+            "sweep_xlsx": args.sweep_xlsx,
+        },
+        "augmentation_pipeline": (
+            [
+                "RandFlipd(x3)", "RandRotate90d", "RandAffined",
+                "RandGaussianNoised", "RandGaussianSmoothd",
+                "RandScaleIntensityd", "RandShiftIntensityd",
+                "RandAdjustContrastd",
+            ]
+            if getattr(args, "augment", False) else []
+        ),
+        "random_crop": getattr(args, "random_crop", True),
+        "pos_ratio": getattr(args, "pos_ratio", 0.8),
+    }
+    with open(os.path.join(args.output_dir, "run_metadata.json"), "w", encoding="utf-8") as f:
+        json.dump(run_metadata, f, indent=2, default=str, ensure_ascii=False)
+    logger.info(f"Saved run_metadata.json under {args.output_dir}")
 
     if args.model == "sam_adapter":
         if args.roi_size != [128, 128, 128]:

@@ -47,7 +47,7 @@ class Trainer:
 
         return CustomDataset
 
-    def get_dataset(self): 
+    def get_dataset(self):
         dataset_class = self.get_dataset_class()
         self.dataset = dataset_class(self.A,
                                      self.P,
@@ -57,7 +57,8 @@ class Trainer:
                                      mode="train",
                                      roi_size=getattr(self.args, "roi_size", (96, 128, 128)),
                                      samples_per_volume=getattr(self.args, "num_samples", 1),
-                                     pos_ratio=getattr(self.args, "pos_ratio", 0.5),
+                                     pos_ratio=getattr(self.args, "pos_ratio", 0.8),
+                                     random_crop=getattr(self.args, "random_crop", True),
                                      augment=getattr(self.args, "augment", False))
         return self.dataset
     
