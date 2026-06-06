@@ -140,10 +140,26 @@ class PipelineConfig:
     def __post_init__(self):
         if self.checkpoints is None:
             dt = self.data_type or "ct"
+
+            def _resolve_ckpt(model_subdir: str) -> str:
+                """Latest timestamp folder's best_model.pt, with fallback to the
+                pre-timestamp ./checkpoints/<model>/<data_type>/best_model.pt path."""
+                base = Path(f"./checkpoints/{model_subdir}/{dt}")
+                flat = base / "best_model.pt"
+                if base.exists():
+                    runs = sorted(
+                        (p for p in base.iterdir()
+                         if p.is_dir() and (p / "best_model.pt").exists()),
+                        reverse=True,
+                    )
+                    if runs:
+                        return str(runs[0] / "best_model.pt")
+                return str(flat)
+
             self.checkpoints = {
-                "unet": f"./checkpoints/unet/{dt}/best_model.pt",
-                "swinunetr": f"./checkpoints/swinunetr/{dt}/best_model.pt",
-                "sam3d_adapter": f"./checkpoints/sam_adapter/{dt}/best_model.pt",
+                "unet": _resolve_ckpt("unet"),
+                "swinunetr": _resolve_ckpt("swinunetr"),
+                "sam3d_adapter": _resolve_ckpt("sam_adapter"),
             }
         if self.nnunet_dataset == "auto":
             self.nnunet_dataset = "002" if self.data_type == "liver" else "001"
