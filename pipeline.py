@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
+import os
 import shutil
 import subprocess
 import time
@@ -85,6 +86,12 @@ class PipelineConfig:
     # copy step and re-run only tumor extraction. Useful when new model
     # checkpoints arrive and you just want to refresh their predictions.
     reuse_registration: bool = True
+
+    # Pull cached A/P/D registrations from another run's timestamp folder.
+    # "" = no cross-run cache. "latest" = newest sibling timestamp under
+    # Results/<data_type>/. Otherwise pass an explicit timestamp string like
+    # "20260606_143217".
+    cache_from: str = ""
 
     # Tumor inference selection.
     # Pick a subset like ("unet",) for a single model, or keep all four to run them together.
@@ -594,12 +601,73 @@ def tumor_extraction_per_attempt_node(state: PipelineState) -> PipelineState:
 
     reuse = bool(getattr(cfg, "reuse_registration", True))
 
+    # Build the list of per_attempt roots to scan for a cache hit, in
+    # priority order: this run first, then optional cross-run sources.
+    cache_roots: List[Path] = [per_attempt_root]
+    cache_from = (getattr(cfg, "cache_from", "") or "").strip()
+    if cache_from:
+        data_type_dir = Path(cfg.results_root) / cfg.data_type
+        if cache_from.lower() == "latest" and data_type_dir.exists():
+            siblings = sorted(
+                (p for p in data_type_dir.iterdir()
+                 if p.is_dir() and p.name != cfg.timestamp),
+                reverse=True,
+            )
+            for sib in siblings:
+                extra = sib / case["case_id"] / "per_attempt"
+                if extra.exists():
+                    cache_roots.append(extra)
+                    break
+        else:
+            extra = data_type_dir / cache_from / case["case_id"] / "per_attempt"
+            if extra.exists():
+                cache_roots.append(extra)
+
+    def _link_or_copy(src: Path, dst: Path) -> None:
+        if dst.exists():
+            return
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.symlink(os.path.relpath(src, dst.parent), dst)
+        except OSError:
+            shutil.copy2(src, dst)
+
+    def _stage_cache_into_run(src_dir: Path, dst_dir: Path) -> None:
+        """Bring a cached attempt folder into the current run dir (symlink first,
+        copy fallback) so tumor outputs land inside this run's timestamp folder."""
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        for phase in ("A", "P", "D"):
+            _link_or_copy(src_dir / f"{phase}.nii.gz", dst_dir / f"{phase}.nii.gz")
+        src_liver = src_dir / "liver_images"
+        if src_liver.exists():
+            for f in src_liver.glob("*_liver.nii.gz"):
+                _link_or_copy(f, dst_dir / "liver_images" / f.name)
+        src_masks = src_dir / "liver_masks"
+        if src_masks.exists():
+            for phase_dir in src_masks.iterdir():
+                if not phase_dir.is_dir():
+                    continue
+                for f in phase_dir.iterdir():
+                    if f.is_file():
+                        _link_or_copy(f, dst_dir / "liver_masks" / phase_dir.name / f.name)
+        for fname in ("liver.nii.gz", "liver_dice.json"):
+            sf = src_dir / fname
+            if sf.exists():
+                _link_or_copy(sf, dst_dir / fname)
+
     def _cached_attempt_dir(att: int) -> Optional[Path]:
-        """Return an existing attempt_<N>[_reused] folder if A/P/D already exist there."""
-        for name in (f"attempt_{att}", f"attempt_{att}_reused"):
-            d = per_attempt_root / name
-            if d.exists() and all((d / f"{p}.nii.gz").exists() for p in ("A", "P", "D")):
-                return d
+        """Return an attempt_<N>[_reused] folder (staged into this run) if
+        any cache root has A/P/D ready."""
+        for root in cache_roots:
+            for name in (f"attempt_{att}", f"attempt_{att}_reused"):
+                d = root / name
+                if d.exists() and all((d / f"{p}.nii.gz").exists() for p in ("A", "P", "D")):
+                    if root == per_attempt_root:
+                        return d
+                    # Cross-run cache hit: stage into this run dir first.
+                    staged = per_attempt_root / name
+                    _stage_cache_into_run(d, staged)
+                    return staged
         return None
 
     for attempt in range(1, cfg.max_registration_attempts + 1):
@@ -830,6 +898,10 @@ def parse_args() -> argparse.Namespace:
                              "present; only re-run tumor extraction.")
     parser.add_argument("--no-reuse-registration", dest="reuse_registration", action="store_false",
                         help="Force every attempt to re-run registration even if cached.")
+    parser.add_argument("--cache_from", default="",
+                        help='Cross-run cache. Pass a timestamp like "20260606_143217" or '
+                             '"latest" to scan Results/<data_type>/<that_ts>/<case_id>/per_attempt '
+                             'for A/P/D and stage them into this run.')
     parser.add_argument("--nnunet_dataset", default="auto",
                         help='nnUNet dataset id ("001"/"002"/...). '
                              '"auto" picks "001" for data_type=ct and "002" for data_type=liver.')
@@ -850,6 +922,7 @@ def build_cfg_from_args(args: argparse.Namespace) -> PipelineConfig:
         nnunet_dataset=args.nnunet_dataset,
         nnunet_config=args.nnunet_config,
         reuse_registration=args.reuse_registration,
+        cache_from=args.cache_from,
         registration_backend=args.registration_backend,
         liver_dice_threshold=args.liver_dice_threshold,
         max_registration_attempts=args.max_registration_attempts,
